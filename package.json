@@ -1,0 +1,18 @@
+{
+  "name": "rainbow-video-road",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A 3D rainbow-road style racer where every slat of the track is a live, pixelated, hue-shifted video clip from a folder you choose.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  }
+}
