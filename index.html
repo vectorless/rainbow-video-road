@@ -25,8 +25,10 @@
             Choose video folder
           </button>
           <button id="start-demo" class="btn btn-ghost" type="button">Race without videos</button>
+          <button id="open-editor" class="btn btn-ghost" type="button">Track editor</button>
         </div>
 
+        <p id="track-line" class="track-line">Track: <b id="track-name">—</b></p>
         <p id="folder-status" class="status" aria-live="polite"></p>
 
         <div class="drop-hint">…or drop a folder of clips anywhere on this page</div>
@@ -57,6 +59,7 @@
           <button id="resume" class="btn btn-primary" type="button">Resume</button>
           <button id="pick-folder-2" class="btn btn-ghost" type="button">Change video folder</button>
           <button id="regen-track" class="btn btn-ghost" type="button">New track layout</button>
+          <button id="open-editor-2" class="btn btn-ghost" type="button">Track editor</button>
           <button id="back-to-menu" class="btn btn-ghost" type="button">Main menu</button>
         </div>
       </div>
@@ -149,6 +152,56 @@
       </label>
       <button id="reset-settings" class="btn btn-ghost tiny" type="button">Reset to defaults</button>
     </aside>
+
+    <!-- Track editor -->
+    <aside id="editor" class="editor hidden" aria-label="Track editor">
+      <header>
+        <h3>Track editor</h3>
+        <div class="ed-head-actions">
+          <button id="ed-undo" class="btn btn-ghost tiny" type="button" title="Undo (⌘Z / Ctrl+Z)">Undo</button>
+          <button id="ed-redo" class="btn btn-ghost tiny" type="button" title="Redo (⇧⌘Z / Ctrl+Y)">Redo</button>
+          <button id="ed-close" class="icon-btn small" type="button" aria-label="Close editor">✕</button>
+        </div>
+      </header>
+
+      <label class="ed-field">Name
+        <input id="ed-name" type="text" maxlength="60" autocomplete="off" spellcheck="false" />
+      </label>
+
+      <canvas id="ed-map" class="ed-map" aria-label="Track map"></canvas>
+      <p class="ed-hint">Drag a point · double‑click to add one · right‑click or <kbd>⌫</kbd> to remove · wheel zooms · drag empty space to pan · <kbd>F</kbd> fits</p>
+
+      <canvas id="ed-elev" class="ed-elev" aria-label="Elevation profile"></canvas>
+      <p class="ed-hint">Elevation along the track — drag a point up or down</p>
+
+      <div id="ed-stats" class="ed-stats"></div>
+      <div id="ed-warnings" class="ed-warnings"></div>
+
+      <div class="ed-sliders">
+        <label>Road width <output data-ed-out="width"></output>
+          <input id="ed-width" type="range" min="8" max="30" step="1" />
+        </label>
+        <label>Banking <output data-ed-out="bank"></output>
+          <input id="ed-bank" type="range" min="0" max="2" step="0.1" />
+        </label>
+      </div>
+
+      <div class="ed-actions">
+        <button id="ed-test" class="btn btn-primary" type="button">Test drive</button>
+        <div class="ed-grid">
+          <button id="ed-start" class="btn btn-ghost tiny" type="button" title="Make the selected point the start/finish line">Set start here</button>
+          <button id="ed-generate" class="btn btn-ghost tiny" type="button">New random</button>
+          <button id="ed-save" class="btn btn-ghost tiny" type="button">Save</button>
+          <button id="ed-delete-saved" class="btn btn-ghost tiny" type="button">Delete saved</button>
+          <button id="ed-export" class="btn btn-ghost tiny" type="button">Export .json</button>
+          <button id="ed-import" class="btn btn-ghost tiny" type="button">Import .json</button>
+        </div>
+        <select id="ed-load" aria-label="Load a saved track"><option value="">Load a saved track…</option></select>
+        <button id="ed-share" class="btn btn-ghost tiny" type="button">Copy share link</button>
+      </div>
+      <p id="ed-status" class="status" aria-live="polite"></p>
+    </aside>
+    <input id="track-import" type="file" accept="application/json,.json" hidden />
 
     <!-- Legacy folder input (browsers without showDirectoryPicker) -->
     <input id="folder-input" type="file" webkitdirectory directory multiple accept="video/*" hidden />

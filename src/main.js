@@ -6,7 +6,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 import './style.css';
 import { Settings } from './core/settings.js';
-import { TrackPath } from './track/TrackPath.js';
+import { TrackPath, validateTrackData } from './track/TrackPath.js';
 import { TrackMesh } from './track/TrackMesh.js';
 import { createSharedUniforms } from './track/slatShader.js';
 import { Space } from './world/Space.js';
@@ -17,15 +17,21 @@ import { VideoPool } from './video/VideoPool.js';
 import { pickVideoFolder, filesFromDrop, prepareVideoFiles, supportsDirectoryPicker } from './video/folderPicker.js';
 import { Hud, formatTime } from './ui/Hud.js';
 import { SettingsPanel } from './ui/SettingsPanel.js';
+import { TrackEditor } from './editor/TrackEditor.js';
+import { loadActiveSource, storeActiveSource, decodeTrackFromHash } from './track/trackStore.js';
 
 const $ = (sel) => document.querySelector(sel);
 
 class Game {
   constructor() {
     this.settings = new Settings();
-    this.state = 'menu'; // 'menu' | 'countdown' | 'racing' | 'paused'
+    this.state = 'menu'; // 'menu' | 'countdown' | 'racing' | 'paused' | 'editor'
     this.clock = new THREE.Clock();
     this.time = 0;
+
+    // Which track to build: the last one used, or the seeded default.
+    /** @type {import('./track/trackStore.js').TrackSource} */
+    this.trackSource = loadActiveSource() || { type: 'generated', seed: this.settings.get('seed') };
 
     this.#setupRenderer();
     this.#setupScene();
@@ -35,6 +41,22 @@ class Game {
     window.addEventListener('resize', () => this.#onResize());
 
     this.renderer.setAnimationLoop(() => this.#frame());
+    this.#loadSharedTrack();
+  }
+
+  /** A track in the URL hash (share link) wins over the remembered one. */
+  async #loadSharedTrack() {
+    try {
+      const data = await decodeTrackFromHash();
+      if (!data) return;
+      this.setTrackSource({ type: 'custom', data });
+      this.folderStatus.textContent = `Loaded shared track “${data.name}” — open the editor to save it.`;
+      this.folderStatus.classList.remove('error');
+    } catch (err) {
+      console.warn('[track] bad share link', err);
+      this.folderStatus.textContent = `That share link didn't work: ${err.message}`;
+      this.folderStatus.classList.add('error');
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -85,8 +107,25 @@ class Game {
     this.kart.model.visible = false;
   }
 
+  /** Build a TrackPath for a track source (may throw for invalid custom data). */
+  #pathFor(source) {
+    return source.type === 'custom' ? TrackPath.fromJSON(source.data) : TrackPath.generate(source.seed);
+  }
+
+  /** Switch tracks: rebuild the world, remember the choice, update the menu. */
+  setTrackSource(source) {
+    const path = this.#pathFor(source); // validate before tearing anything down
+    this.trackSource = source;
+    if (this.state === 'editor') this._storePending = true; // the editor rebuilds on every drag; persist on exit
+    else storeActiveSource(source);
+    this.#buildTrack(path);
+    if (this.state === 'racing' || this.state === 'countdown') this.startRace();
+    else this.kart.model.visible = this.state !== 'menu' && this.state !== 'editor';
+    return path;
+  }
+
   /** (Re)build the path, the road mesh, and reposition the kart. */
-  #buildTrack() {
+  #buildTrack(path = this.#pathFor(this.trackSource)) {
     const s = this.settings;
     if (this.track) {
       this.scene.remove(this.track);
@@ -94,7 +133,7 @@ class Game {
     }
     if (this.kart) this.scene.remove(this.kart.model);
 
-    this.path = new TrackPath(s.get('seed'));
+    this.path = path;
     this.track = new TrackMesh(this.path, {
       textures: this.videoPool.textures(),
       tilesAcross: s.get('tilesAcross'),
@@ -112,6 +151,12 @@ class Game {
 
     this.chase.setPath(this.path);
     this.chase.flyS = 0;
+    this.#updateTrackLine();
+  }
+
+  #updateTrackLine() {
+    const el = $('#track-name');
+    if (el) el.textContent = this.path.name || (this.trackSource.type === 'generated' ? `Generated #${this.trackSource.seed}` : 'Custom track');
   }
 
   #setupUI() {
@@ -141,6 +186,24 @@ class Game {
       this.startRace();
     });
     $('#back-to-menu').addEventListener('click', () => this.toMenu());
+    $('#open-editor').addEventListener('click', () => this.openEditor());
+    $('#open-editor-2').addEventListener('click', () => this.openEditor());
+
+    this.editor = new TrackEditor({
+      root: $('#editor'),
+      scene: this.scene,
+      camera: this.camera,
+      canvas3d: this.canvas,
+      hooks: {
+        applyTrack: (data) => this.setTrackSource({ type: 'custom', data: validateTrackData(data) }),
+        testDrive: (startS) => {
+          this.editor.close();
+          this.startRace({ startS });
+        },
+        close: () => this.toMenu(),
+        generate: () => TrackPath.generate(Math.floor(Math.random() * 1_000_000)).toJSON(),
+      },
+    });
 
     if (!supportsDirectoryPicker) {
       $('.fineprint').textContent =
@@ -197,7 +260,7 @@ class Game {
         const racing = this.state === 'racing' || this.state === 'countdown';
         this.#buildTrack();
         if (racing) this.startRace();
-        else this.kart.model.visible = this.state !== 'menu';
+        else this.kart.model.visible = this.state !== 'menu' && this.state !== 'editor';
       }, 150);
     };
 
@@ -221,7 +284,11 @@ class Game {
           break;
         case 'tilesAcross':
         case 'slatsPerRainbow':
+          rebuild();
+          break;
         case 'seed':
+          this.trackSource = { type: 'generated', seed: value };
+          storeActiveSource(this.trackSource);
           rebuild();
           break;
         case 'poolSize':
@@ -312,14 +379,18 @@ class Game {
   /* state                                                               */
   /* ------------------------------------------------------------------ */
 
-  startRace() {
+  startRace({ startS = 0 } = {}) {
     this.hud.cancelCountdown();
     this.menu.classList.add('hidden');
     this.pauseMenu.classList.add('hidden');
     this.hud.show();
     this.settingsPanel.hide();
+    if (this.editor?.isOpen) this.editor.close();
+    this.#setFog('near');
+    this.#flushTrackStore();
 
-    this.kart.reset(0);
+    startS = this.path.wrap(startS);
+    this.kart.reset(startS);
     this.kart.model.visible = true;
     this.chase.snap = true;
     this.race = {
@@ -329,8 +400,8 @@ class Game {
       lapTime: 0,
       best: null,
       finished: false,
-      prevS: 0,
-      lapDistance: 0,
+      prevS: startS,
+      lapDistance: startS, // starting mid-track counts as having driven from the line
     };
     this.state = 'countdown';
     this.hud.countdown().then(() => {
@@ -354,12 +425,47 @@ class Game {
 
   toMenu() {
     this.hud.cancelCountdown();
+    if (this.editor?.isOpen) this.editor.close();
+    this.#setFog('near');
+    this.#flushTrackStore();
     this.state = 'menu';
     this.pauseMenu.classList.add('hidden');
     this.hud.hide();
     this.menu.classList.remove('hidden');
     this.kart.model.visible = false;
     this.chase.snap = true;
+    this.#updateTrackLine();
+  }
+
+  openEditor() {
+    this.hud.cancelCountdown();
+    this.menu.classList.add('hidden');
+    this.pauseMenu.classList.add('hidden');
+    this.hud.hide();
+    this.settingsPanel.hide();
+    this.kart.model.visible = false;
+    this.state = 'editor';
+    this.#setFog('far'); // the overview camera is far away; don't fog the whole track out
+    this.editor.open(this.path, { savedId: this.trackSource.savedId || null });
+  }
+
+  #flushTrackStore() {
+    if (this._storePending) {
+      this._storePending = false;
+      storeActiveSource(this.trackSource);
+    }
+  }
+
+  /** Road fog distances: 'near' for driving, 'far' for the editor's overview camera. */
+  #setFog(mode) {
+    const u = this.shared;
+    if (mode === 'far') {
+      u.uFogNear.value = 1400;
+      u.uFogFar.value = 3200;
+    } else {
+      u.uFogNear.value = 140;
+      u.uFogFar.value = 420;
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -394,11 +500,14 @@ class Game {
         break;
       case 'paused':
         break;
+      case 'editor':
+        this.editor.update(dt);
+        break;
       default:
         break;
     }
 
-    if (this.state !== 'menu') {
+    if (this.state !== 'menu' && this.state !== 'editor') {
       this.kart.hue = this.kart.s / (this.track.rowLength * this.settings.get('slatsPerRainbow')) + this.time * this.settings.get('hueSpeed');
       const r = this.race;
       this.hud.update({
@@ -427,6 +536,7 @@ class Game {
       if (this.state === 'racing' || this.state === 'countdown') this.pause();
       else if (this.state === 'paused') this.resume();
       else if (this.settingsPanel.visible) this.settingsPanel.hide();
+      else if (this.state === 'editor') this.toMenu();
     }
     if (a.confirm) {
       if (this.state === 'menu') this.startRace();
@@ -440,7 +550,7 @@ class Game {
         this.hud.toast('Reset', 700);
       }
     }
-    if (a.camera && this.state !== 'menu') {
+    if (a.camera && this.state !== 'menu' && this.state !== 'editor') {
       const name = this.chase.nextMode();
       this.hud.toast(`${name} cam`, 800);
     }
