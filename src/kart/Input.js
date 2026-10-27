@@ -56,6 +56,8 @@ export class Input {
     target.addEventListener('keyup', this._onKeyUp);
     target.addEventListener('blur', this._onBlur);
     this.target = target;
+    /** @type {import('../ui/TouchControls.js').TouchControls | null} on-screen controls, if any */
+    this.touch = null;
   }
 
   dispose() {
@@ -95,6 +97,15 @@ export class Input {
       this._edge(pad.index, 4, pad.buttons[4], 'item');
       this._edge(pad.index, 5, pad.buttons[5], 'item');
       if (Math.abs(lx) > 0 || Math.abs(padThrottle) > 0) this.anyInputAt = performance.now();
+    }
+
+    // On-screen touch controls (phones / tablets)
+    const touch = this.touch;
+    if (touch?.active) {
+      for (const action of touch.poll()) this._pendingActions.add(action);
+      if (Math.abs(touch.steer) > Math.abs(steer)) steer = touch.steer;
+      if (throttle === 0) throttle = touch.throttle;
+      if (touch.drift) drift = true;
     }
 
     this.throttle = clamp(throttle, -1, 1);

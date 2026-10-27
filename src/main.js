@@ -19,6 +19,7 @@ import { VideoPool } from './video/VideoPool.js';
 import { pickVideoFolder, filesFromDrop, prepareVideoFiles, supportsDirectoryPicker } from './video/folderPicker.js';
 import { Hud, formatTime, ordinal } from './ui/Hud.js';
 import { SettingsPanel } from './ui/SettingsPanel.js';
+import { TouchControls } from './ui/TouchControls.js';
 import { TrackEditor } from './editor/TrackEditor.js';
 import { loadActiveSource, storeActiveSource, decodeTrackFromHash } from './track/trackStore.js';
 
@@ -222,6 +223,7 @@ class Game {
 
   #setupUI() {
     this.hud = new Hud($('#hud'));
+    this.input.touch = new TouchControls($('#touch'));
     this.hud.setVideoStatus(this.videoPool.statusText());
     this.menu = $('#menu');
     this.pauseMenu = $('#pause');
@@ -394,7 +396,9 @@ class Game {
   #onResize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    const ratio = Math.min(window.devicePixelRatio || 1, 2) * this.settings.get('renderScale');
+    // phones: cap the pixel ratio lower, they get hot rendering bloom at 3×
+    const maxRatio = document.body.classList.contains('touch-ui') ? 1.5 : 2;
+    const ratio = Math.min(window.devicePixelRatio || 1, maxRatio) * this.settings.get('renderScale');
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, h, false);
     this.composer.setPixelRatio(ratio);

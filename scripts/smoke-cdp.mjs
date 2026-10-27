@@ -1,8 +1,8 @@
 // Minimal Chrome DevTools Protocol driver for smoke-testing the game.
-// usage: (with `npm run dev` running) node scripts/smoke-cdp.mjs <race|fall|misc|items|laser|gallery|editor|remap|og> <outdir>
+// usage: (with `npm run dev` running) node scripts/smoke-cdp.mjs <race|fall|misc|items|laser|gallery|editor|remap|og|readme|mobile|mobile-portrait> <outdir>
 // Drives headless Google Chrome (macOS path below) over the DevTools protocol and
-// writes screenshots + state logs to <outdir>. `og` stages and saves the social preview
-// image (<outdir>/og-image.jpg → copy to public/). See docs/SPEC.md §6.
+// writes screenshots + state logs to <outdir>. `og` stages the social preview image and
+// `readme` the README screenshots (copy them into public/ and docs/screenshots/). See docs/SPEC.md §6.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
@@ -46,8 +46,10 @@ const key = (type, k, code, keyCode) => send('Input.dispatchKeyEvent', { type, k
 
 await send('Runtime.enable');
 await send('Page.enable');
-const VIEW = scenario === 'og' ? [1200, 630] : [1280, 720];
-await send('Emulation.setDeviceMetricsOverride', { width: VIEW[0], height: VIEW[1], deviceScaleFactor: 1, mobile: false });
+const MOBILE = scenario.startsWith('mobile');
+const VIEW = scenario === 'og' ? [1200, 630] : scenario === 'mobile-portrait' ? [390, 844] : MOBILE ? [844, 390] : [1280, 720];
+await send('Emulation.setDeviceMetricsOverride', { width: VIEW[0], height: VIEW[1], deviceScaleFactor: MOBILE ? 2 : 1, mobile: MOBILE });
+if (MOBILE) await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
 await send('Page.navigate', { url: 'http://localhost:5173/' });
 await sleep(2500);
 
@@ -55,6 +57,51 @@ const STATE = `(() => { const g = __rainbowRoad.game; const k = (x) => ({ st: x.
   return JSON.stringify({ state: g.state, fps: g._fps, place: g.race && g.rivals.placeOf(g.race.progress, g.race.finishTime), prog: g.race && +g.race.progress.toFixed(0),
     player: k(g.kart), rivals: g.rivals.active.map((r) => ({ n: r.name, ...k(r.kart), p: +r.progress.toFixed(0), god: r.kart.rescuer.phase })), god: g.kart.rescuer.phase }); })()`;
 
+if (MOBILE) {
+  await sleep(1500);
+  const E = (label, js) => evaluate(js).then((v) => console.log(label, v));
+  const touch = (type, pts) => send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], id) => ({ x, y, id })) });
+  await E('touch-ui', `document.body.classList.contains('touch-ui') + ' ratio=' + __rainbowRoad.game.renderer.getPixelRatio()`);
+  await shot('m-menu');
+  // tap "Race without videos"
+  const b = JSON.parse(await evaluate(`JSON.stringify(document.getElementById('start-demo').getBoundingClientRect())`));
+  await touch('touchStart', [[b.x + b.width / 2, b.y + b.height / 2]]); await touch('touchEnd', []);
+  await sleep(5500);
+  await E('state', `__rainbowRoad.game.state + ' v=' + __rainbowRoad.game.kart.speed.toFixed(1)`);
+  // steer: finger down in the left zone, drag right
+  const [W, H] = VIEW;
+  await touch('touchStart', [[W * 0.2, H * 0.8]]);
+  for (let i = 1; i <= 5; i++) { await touch('touchMove', [[W * 0.2 + i * 14, H * 0.8]]); await sleep(40); }
+  await sleep(400);
+  await E('steering', `(() => { const g = __rainbowRoad.game; return 'touch.steer=' + g.input.touch.steer.toFixed(2) + ' kart.steer=' + g.kart.steer.toFixed(2) + ' throttle=' + g.input.throttle; })()`);
+  await shot('m-steer');
+  // second finger: hold brake while still steering
+  const br = JSON.parse(await evaluate(`JSON.stringify(document.querySelector('[data-touch=brake]').getBoundingClientRect())`));
+  await touch('touchMove', [[W * 0.2 + 70, H * 0.8], [br.x + br.width / 2, br.y + br.height / 2]]);
+  await touch('touchStart', [[W * 0.2 + 70, H * 0.8], [br.x + br.width / 2, br.y + br.height / 2]]);
+  await sleep(300);
+  await E('brake', `'throttle=' + __rainbowRoad.game.input.throttle + ' steer=' + __rainbowRoad.game.input.steer.toFixed(2)`);
+  await touch('touchEnd', []);
+  await sleep(200);
+  await E('released', `'throttle=' + __rainbowRoad.game.input.throttle + ' steer=' + __rainbowRoad.game.input.steer.toFixed(2)`);
+  // item tap with a laser in hand
+  await E('give', `(() => { const k = __rainbowRoad.game.kart; k.held = { type: 'laser', charges: 3 }; k.rolling = 0; return 'ok'; })()`);
+  const it = JSON.parse(await evaluate(`JSON.stringify(document.querySelector('[data-touch=item]').getBoundingClientRect())`));
+  await E('under item', `(() => { const r = document.querySelector('[data-touch=item]').getBoundingClientRect(); const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return el.tagName + '.' + el.className + ' rect=' + JSON.stringify(r); })()`);
+  await E('hook', `(() => { window.__downs = []; document.querySelector('[data-touch=item]').addEventListener('pointerdown', () => window.__downs.push('down')); return 'ok'; })()`);
+  await touch('touchStart', [[it.x + it.width / 2, it.y + it.height / 2]]); await sleep(80); await touch('touchEnd', []);
+  await sleep(300);
+  await E('after item', `JSON.stringify(__rainbowRoad.game.kart.held) + ' downs=' + window.__downs.length + ' rolling=' + __rainbowRoad.game.kart.rolling + ' state=' + __rainbowRoad.game.kart.state`);
+  await shot('m-race');
+  // pause button
+  const pz = JSON.parse(await evaluate(`JSON.stringify(document.querySelector('[data-touch=pause]').getBoundingClientRect())`));
+  await touch('touchStart', [[pz.x + pz.width / 2, pz.y + pz.height / 2]]); await touch('touchEnd', []);
+  await sleep(400);
+  await E('paused', `__rainbowRoad.game.state`);
+  await shot('m-pause');
+  console.log('LOGS:\n' + logs.join('\n'));
+  process.exit(0);
+}
 console.log('loaded rivals:', await evaluate('__rainbowRoad.game.rivals.ready'));
 console.log('settings rails:', await evaluate('__rainbowRoad.game.settings.get("rails")'));
 await evaluate('__rainbowRoad.game.startRace()');
@@ -64,7 +111,35 @@ console.log('grid', await evaluate(STATE));
 await sleep(3500);
 await key('keyDown', 'ArrowUp', 'ArrowUp', 38);
 
-if (scenario === 'og') {
+if (scenario === 'readme') {
+  // README images: a race in progress with the HUD, and the track editor with items placed
+  const E = (label, js) => evaluate(js).then((v) => console.log(label, v));
+  await sleep(5000); // through the countdown
+  await E('stage', `(() => {
+    const g = __rainbowRoad.game; const p = g.path; g.pause();
+    document.getElementById('pause').classList.add('hidden');
+    const boxes = g.items.entries.filter((e) => e.type === 'itembox').sort((a, b) => a.s - b.s);
+    const row = boxes[0].s;
+    const put = (k, ds, lat) => { k.s = p.wrap(row + ds); k.lateral = lat; k.heading = 0; k.speed = 30; k.syncModel(); k.model.visible = true; };
+    const [princess, gorilla, mushroom] = g.rivals.active.map((r) => r.kart);
+    put(g.kart, -19, 0.4); put(mushroom, -9, -3.2); put(princess, -12.5, 3.6); put(gorilla, -6, 1.2);
+    gorilla.giveShield(5); gorilla.gear.update(0.016, { shield: 5, laser: false, hue: 0 });
+    g.kart.held = { type: 'laser', charges: 2 }; g.kart.rolling = 0; g.kart.coins = 4; g.kart.gear.update(0.016, { shield: 0, laser: true, hue: 0 });
+    g.race.time = 42.37; g.race.lap = 2; g.race.best = 38.91; g.race.progress = 9999;
+    g.hud.update({ speed: 30, lap: 2, lapsTotal: 3, time: 42.37, best: 38.91, boost: 0.4, finished: false, place: 2, racers: 4, item: { type: 'laser', charges: 2, rolling: false }, coins: 4 });
+    const cam = g.camera; p.pointAt(row - 29, 0.6, 4.1, cam.position); cam.up.copy(p.frameAt(row - 29).normal);
+    cam.lookAt(p.pointAt(row - 3, 0.2, 1.2)); cam.fov = 66; cam.updateProjectionMatrix();
+    return 'ok'; })()`);
+  await sleep(1500);
+  let r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 88 });
+  fs.writeFileSync(`${out}/gameplay.jpg`, Buffer.from(r.result.data, 'base64'));
+  await E('editor', `(() => { const g = __rainbowRoad.game; g.toMenu(); g.openEditor(); const ed = g.editor; ed.selected = 5; ed.needsDraw = true; return 'ok'; })()`);
+  await sleep(800);
+  await E('bank', `(() => { const ed = __rainbowRoad.game.editor; const on = document.getElementById('ed-pb-on'); on.checked = true; on.dispatchEvent(new Event('change')); const s = document.getElementById('ed-pb'); s.value = 25; s.dispatchEvent(new Event('input')); document.querySelector('[data-tool=itembox]').click(); return 'ok'; })()`);
+  await sleep(4000); // let the overview camera settle
+  r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 88 });
+  fs.writeFileSync(`${out}/editor.jpg`, Buffer.from(r.result.data, 'base64'));
+} else if (scenario === 'og') {
   // Staged social preview: karts heading into a row of item boxes, a laser shot, a shield, the title on top.
   const E = (label, js) => evaluate(js).then((v) => console.log(label, v));
   await sleep(2500);

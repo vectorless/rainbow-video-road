@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <title>Rainbow Video Road</title>
     <meta name="description" content="A browser kart racer on a floating rainbow road made of your own video clips. Race three rivals, grab item boxes, fire lasers, dodge blocks — and build your own tracks." />
@@ -116,6 +116,23 @@
         <div id="video-status" class="video-status">no videos · demo textures</div>
       </div>
       <div id="toast" class="toast"></div>
+
+      <!-- touch controls (shown on phones / tablets) -->
+      <div id="touch" class="touch">
+        <div class="touch-steer" aria-label="Steer: drag left or right">
+          <div class="touch-knob-base"><div class="touch-knob"></div></div>
+          <span class="touch-hint">drag to steer</span>
+        </div>
+        <div class="touch-buttons">
+          <button class="tb tb-item" type="button" data-touch="item">Item</button>
+          <button class="tb tb-drift" type="button" data-touch="drift">Drift</button>
+          <button class="tb tb-brake" type="button" data-touch="brake">Brake</button>
+        </div>
+        <div class="touch-top">
+          <button class="tb tb-small" type="button" data-touch="camera" aria-label="Change camera">Cam</button>
+          <button class="tb tb-small" type="button" data-touch="pause" aria-label="Pause">❚❚</button>
+        </div>
+      </div>
     </section>
 
     <!-- Settings -->

@@ -264,6 +264,18 @@ There is no automated test suite. Verification so far:
 - Icons: `public/favicon.svg` (source), `favicon-32.png` and `apple-touch-icon.png` (180) rendered
   from it with headless Chrome.
 
+## 6c. Mobile / touch
+
+- `src/ui/TouchControls.js`: on coarse-pointer devices (or after the first touch) `body.touch-ui`
+  shows on-screen controls inside the HUD: drag on the left half to steer (analog, ±70 px = full
+  lock), hold Brake / Drift, tap Item / Cam / Pause. Gas is automatic on touch. `Input.poll()`
+  merges it with keyboard/gamepad (`input.touch`).
+- Phones: pixel ratio capped at 1.5, speedo moves to the bottom centre, video status hidden,
+  overlays scroll (flex + auto margins) and the menu tightens under 520 px height.
+- Tested with Chrome's touch emulation (`smoke-cdp.mjs mobile` / `mobile-portrait`), not yet on a
+  real phone.
+- README images live in `docs/screenshots/` (`smoke-cdp.mjs readme <dir>` re-stages them).
+
 ## 7. Known limitations and ideas
 
 - Top speed is temporarily halved; the AI pace and rubber band were tuned for 32 u/s.
