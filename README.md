@@ -33,6 +33,9 @@ and pick a folder that contains video files. You can also drop a folder onto the
 
 Build a static version with `npm run build` (output in `dist/`, serves from any static host).
 
+Every push to `main` is built and deployed to GitHub Pages by `.github/workflows/pages.yml`:
+**https://vectorless.github.io/rainbow-video-road/**
+
 ## Controls
 
 | Action | Keyboard | Gamepad |
