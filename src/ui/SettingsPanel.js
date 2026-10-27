@@ -66,6 +66,7 @@ function formatValue(key, value) {
     case 'videoMix':
       return `${Math.round(Number(value) * 100)}%`;
     case 'renderScale':
+    case 'rivalPace':
       return `${Math.round(Number(value) * 100)}%`;
     case 'clipSeconds':
       return `${value}s`;

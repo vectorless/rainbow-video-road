@@ -75,6 +75,7 @@
         <div id="boost-bar" class="boost-bar"><i></i></div>
       </div>
       <div class="hud-top">
+        <div class="place"><span>Pos</span> <b id="place">1st</b><em>/<span id="racers">3</span></em></div>
         <div class="lap"><span>Lap</span> <b id="lap">1</b><em>/<span id="laps-total">3</span></em></div>
         <div class="times">
           <div><span>Time</span> <b id="time">0:00.00</b></div>
@@ -135,6 +136,10 @@
 
       <h4>Race</h4>
       <label class="check"><input type="checkbox" data-setting="rails" /> Guard rails (can't fall off)</label>
+      <label class="check"><input type="checkbox" data-setting="rivals" /> Rival racers</label>
+      <label>Rival pace <output data-out="rivalPace"></output>
+        <input type="range" data-setting="rivalPace" min="0.7" max="1.1" step="0.01" />
+      </label>
       <label>Laps <output data-out="laps"></output>
         <input type="range" data-setting="laps" min="1" max="9" step="1" />
       </label>

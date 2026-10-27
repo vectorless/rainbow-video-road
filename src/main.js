@@ -11,11 +11,12 @@ import { TrackMesh } from './track/TrackMesh.js';
 import { createSharedUniforms } from './track/slatShader.js';
 import { Space } from './world/Space.js';
 import { Kart } from './kart/Kart.js';
+import { Rivals } from './kart/Rivals.js';
 import { Input } from './kart/Input.js';
 import { ChaseCamera } from './camera/ChaseCamera.js';
 import { VideoPool } from './video/VideoPool.js';
 import { pickVideoFolder, filesFromDrop, prepareVideoFiles, supportsDirectoryPicker } from './video/folderPicker.js';
-import { Hud, formatTime } from './ui/Hud.js';
+import { Hud, formatTime, ordinal } from './ui/Hud.js';
 import { SettingsPanel } from './ui/SettingsPanel.js';
 import { TrackEditor } from './editor/TrackEditor.js';
 import { loadActiveSource, storeActiveSource, decodeTrackFromHash } from './track/trackStore.js';
@@ -103,8 +104,42 @@ class Game {
     this.input = new Input(window);
     this.chase = new ChaseCamera(this.camera, null);
 
+    this.rivals = new Rivals(this.scene);
+    this.rivals.enabled = s.get('rivals');
+    this.rivals.setPace(s.get('rivalPace'));
+    this.rivals.setRails(s.get('rails'));
+    this.rivals.ready.then(() => {
+      // Models arrive after the first frame; join a race that is still counting down.
+      if (this.state === 'countdown') this.#placeGrid(this.race.startS);
+      this.#setKartsVisible(this.#kartsShown());
+    });
+
     this.#buildTrack();
-    this.kart.model.visible = false;
+    this.#setKartsVisible(false);
+  }
+
+  /** Karts are hidden on the menu and in the editor. */
+  #kartsShown() {
+    return this.state !== 'menu' && this.state !== 'editor';
+  }
+
+  #setKartsVisible(visible) {
+    this.kart.model.visible = visible;
+    this.kart.rescuer.visible = visible && this.kart.rescuer.active;
+    this.rivals.setVisible(visible);
+  }
+
+  /**
+   * Starting grid: two staggered columns behind `startS`, rivals in front and the
+   * player at the back. Returns the player's slot.
+   */
+  #placeGrid(startS) {
+    const count = this.rivals.active.length + 1;
+    const side = Math.min(3, this.path.halfWidth - 2);
+    const slots = Array.from({ length: count }, (_, k) => ({ s: startS - k * 6, lateral: (k % 2 ? 1 : -1) * side }));
+    const mine = slots[count - 1];
+    this.rivals.placeOnGrid(slots);
+    return mine;
   }
 
   /** Build a TrackPath for a track source (may throw for invalid custom data). */
@@ -120,7 +155,7 @@ class Game {
     else storeActiveSource(source);
     this.#buildTrack(path);
     if (this.state === 'racing' || this.state === 'countdown') this.startRace();
-    else this.kart.model.visible = this.state !== 'menu' && this.state !== 'editor';
+    else this.#setKartsVisible(this.#kartsShown());
     return path;
   }
 
@@ -131,7 +166,7 @@ class Game {
       this.scene.remove(this.track);
       this.track.dispose();
     }
-    if (this.kart) this.scene.remove(this.kart.model);
+    if (this.kart) this.scene.remove(this.kart.model, this.kart.rescuer);
 
     this.path = path;
     this.track = new TrackMesh(this.path, {
@@ -147,7 +182,8 @@ class Game {
     else this.kart.path = this.path;
     this.kart.rails = s.get('rails');
     this.kart.reset(0);
-    this.scene.add(this.kart.model);
+    this.scene.add(this.kart.model, this.kart.rescuer);
+    this.rivals.setPath(this.path);
 
     this.chase.setPath(this.path);
     this.chase.flyS = 0;
@@ -260,7 +296,7 @@ class Game {
         const racing = this.state === 'racing' || this.state === 'countdown';
         this.#buildTrack();
         if (racing) this.startRace();
-        else this.kart.model.visible = this.state !== 'menu' && this.state !== 'editor';
+        else this.#setKartsVisible(this.#kartsShown());
       }, 150);
     };
 
@@ -305,6 +341,15 @@ class Game {
         case 'rails':
           this.track.setRails(value);
           this.kart.rails = value;
+          this.rivals.setRails(value);
+          break;
+        case 'rivals':
+          this.rivals.enabled = value;
+          if (this.state === 'racing' || this.state === 'countdown') this.startRace({ startS: this.race.startS });
+          else this.#setKartsVisible(this.#kartsShown());
+          break;
+        case 'rivalPace':
+          this.rivals.setPace(value);
           break;
         case 'laps':
           if (this.race) this.race.lapsTotal = value;
@@ -390,18 +435,22 @@ class Game {
     this.#flushTrackStore();
 
     startS = this.path.wrap(startS);
-    this.kart.reset(startS);
-    this.kart.model.visible = true;
+    const slot = this.#placeGrid(startS);
+    this.kart.reset(this.path.wrap(slot.s), slot.lateral);
+    this.#setKartsVisible(true);
     this.chase.snap = true;
     this.race = {
+      startS,
       lap: 1,
       lapsTotal: this.settings.get('laps'),
       time: 0,
       lapTime: 0,
       best: null,
       finished: false,
-      prevS: startS,
-      lapDistance: startS, // starting mid-track counts as having driven from the line
+      finishTime: null,
+      prevS: this.kart.s,
+      lapDistance: slot.s, // starting mid-track counts as having driven from the line
+      progress: slot.s, // total distance driven, for race positions (never reset)
     };
     this.state = 'countdown';
     this.hud.countdown().then(() => {
@@ -432,7 +481,7 @@ class Game {
     this.pauseMenu.classList.add('hidden');
     this.hud.hide();
     this.menu.classList.remove('hidden');
-    this.kart.model.visible = false;
+    this.#setKartsVisible(false);
     this.chase.snap = true;
     this.#updateTrackLine();
   }
@@ -443,7 +492,7 @@ class Game {
     this.pauseMenu.classList.add('hidden');
     this.hud.hide();
     this.settingsPanel.hide();
-    this.kart.model.visible = false;
+    this.#setKartsVisible(false);
     this.state = 'editor';
     this.#setFog('far'); // the overview camera is far away; don't fog the whole track out
     this.editor.open(this.path, { savedId: this.trackSource.savedId || null });
@@ -491,10 +540,12 @@ class Game {
         break;
       case 'countdown':
         this.kart.update(dt, this.input, false);
+        this.rivals.update(dt, this.kart, this.race, false);
         this.chase.follow(this.kart, dt);
         break;
       case 'racing':
         this.kart.update(dt, this.input, true);
+        this.rivals.update(dt, this.kart, this.race, true);
         this.#updateRace(dt);
         this.chase.follow(this.kart, dt);
         break;
@@ -518,6 +569,8 @@ class Game {
         best: r.best,
         boost: this.kart.drifting ? Math.min(1, this.kart.driftTime / 0.75) : this.kart.boostLevel,
         finished: r.finished,
+        place: this.rivals.placeOf(r.progress, r.finishTime),
+        racers: this.rivals.active.length + 1,
       });
     }
 
@@ -568,6 +621,7 @@ class Game {
     if (delta > L / 2) delta -= L;
     if (delta < -L / 2) delta += L;
     r.lapDistance += delta;
+    r.progress += delta;
     const crossedForward = r.prevS > L * 0.75 && this.kart.s < L * 0.25;
     const crossedBackward = r.prevS < L * 0.25 && this.kart.s > L * 0.75;
     r.prevS = this.kart.s;
@@ -578,7 +632,10 @@ class Game {
       r.lapTime = 0;
       if (r.lap >= r.lapsTotal) {
         r.finished = true;
-        this.hud.toast(`Finish · ${formatTime(r.time)}`, 4000);
+        r.finishTime = r.time;
+        const racers = this.rivals.active.length + 1;
+        const place = racers > 1 ? ` · ${ordinal(this.rivals.placeOf(r.progress, r.finishTime))} of ${racers}` : '';
+        this.hud.toast(`Finish${place} · ${formatTime(r.time)}`, 4000);
       } else {
         r.lap++;
         this.hud.toast(r.lap === r.lapsTotal ? 'Final lap!' : `Lap ${r.lap}`, 1400);

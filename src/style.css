@@ -241,6 +241,7 @@ kbd {
 .hud-top b { font-size: 18px; font-weight: 800; }
 .hud-top em { font-style: normal; color: var(--muted); font-size: 14px; }
 .times { display: flex; gap: 20px; }
+.place[hidden] { display: none; }
 
 .hud-right { position: absolute; right: 24px; bottom: 24px; text-align: right; }
 .video-status {

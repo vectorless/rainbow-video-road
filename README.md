@@ -8,7 +8,11 @@ a live, pixelated, hue‑shifted segment of one of your videos — a rainbow you
 - Built‑in **track editor**: drag points on a top‑down map and an elevation strip while the
   3D track rebuilds live; save, export, import and share tracks as links
 - Each slat tile streams a clip from your folder, pixelated and recoloured in a shader
-- Arcade driving: acceleration, drifting with mini‑turbos, banked corners, falling off (optional rails)
+- Arcade driving: acceleration, drifting with mini‑turbos, banked corners
+- Two AI rivals (a princess and a gorilla, each in their own kart) with a starting grid,
+  bumping and a race position in the HUD
+- No barriers by default: drive off the edge and a **space god** swoops down, beams you up
+  and puts you back on the road (guard rails are still an option in Settings)
 - Chase / far / hood cameras, lap timing, bloom, gamepad support
 - Clips are read directly by your browser — nothing is uploaded anywhere
 
@@ -56,6 +60,31 @@ and its elevation profile; the 3D view behind it rebuilds as you edit.
 
 The game remembers the last track you used. Changing the **Track seed** in Settings goes
 back to a generated layout.
+
+## Rivals and the space god
+
+The rivals are imported models (`public/models/*.glb`), each a driver and kart in one static
+mesh. They are driven by `src/kart/AIDriver.js`, which produces the same throttle/steer
+input the player's controls do, so they obey the same physics. They aim for a racing line
+on the inside of the bends, go round karts ahead of them, and rubber‑band a little toward
+the player. **Rival racers** and **Rival pace** are in Settings.
+
+Any kart that falls off is rescued by its space god (`src/kart/SpaceGod.js`), which carries
+it back to the last spot it was safely on the road. `R` still puts you back at once.
+
+### Adding a rival model
+
+Models from generators such as Meshy are far too heavy (1–3 million triangles). Shrink them
+with gltf-transform (a dev dependency), keeping the originals out of git in `incoming/`:
+
+```bash
+npx gltf-transform optimize incoming/original.glb public/models/name.glb \
+  --compress false --texture-compress webp --texture-size 1024 \
+  --simplify-ratio 0.03 --simplify-error 0.002   # aim for ~10–30k triangles
+```
+
+Then add an entry to `ROSTER` in `src/kart/Rivals.js`. `FigureKartModel` assumes the model
+faces −X (as Meshy exports do); pass a different `yaw` if it doesn't.
 
 ### Track format
 
@@ -121,7 +150,14 @@ src/track/slatShader.js    pixelate + hue-shift material, rail material
 src/video/VideoPool.js     the pool of <video> streams and textures
 src/video/folderPicker.js  folder selection (FS Access API / input / drag & drop)
 src/video/fallbackTextures.js  procedural textures used before clips load
-src/kart/                  arcade driving model, kart mesh, input
+src/kart/Kart.js           arcade driving model (track space), falling and rescue states
+src/kart/KartModel.js      the player's kart, built from primitives
+src/kart/FigureKartModel.js  wraps an imported model as a kart
+src/kart/AIDriver.js       steering/throttle for computer racers
+src/kart/Rivals.js         rival roster, starting grid, bumping, race positions
+src/kart/SpaceGod.js       the rescuer that carries fallen karts back to the road
+src/kart/Input.js          keyboard + gamepad
+public/models/             optimised rival models (GLB)
 src/camera/ChaseCamera.js  chase / far / hood cameras and the menu fly‑over
 src/world/Space.js         stars, nebulae, planets, lights
 src/ui/                    HUD and settings panel bindings

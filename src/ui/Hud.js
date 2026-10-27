@@ -5,6 +5,9 @@ export class Hud {
     this.el = {
       speed: root.querySelector('#speed'),
       lap: root.querySelector('#lap'),
+      placeBox: root.querySelector('.place'),
+      place: root.querySelector('#place'),
+      racers: root.querySelector('#racers'),
       lapsTotal: root.querySelector('#laps-total'),
       time: root.querySelector('#time'),
       best: root.querySelector('#best'),
@@ -25,7 +28,7 @@ export class Hud {
     this.root.classList.add('hidden');
   }
 
-  update({ speed, lap, lapsTotal, time, best, boost, finished }) {
+  update({ speed, lap, lapsTotal, time, best, boost, finished, place = 1, racers = 1 }) {
     const kmh = Math.round(Math.abs(speed) * 3.1);
     if (kmh !== this._lastSpeed) {
       this.el.speed.textContent = String(kmh);
@@ -36,6 +39,9 @@ export class Hud {
     this.el.time.textContent = formatTime(time);
     this.el.best.textContent = best == null ? '—' : formatTime(best);
     this.el.boost.style.width = `${Math.round(boost * 100)}%`;
+    this.el.placeBox.hidden = racers < 2;
+    this.el.place.textContent = ordinal(place);
+    this.el.racers.textContent = String(racers);
   }
 
   setVideoStatus(text) {
@@ -80,6 +86,13 @@ export class Hud {
     clearTimeout(this._countdownTimer);
     this.countdownEl.classList.add('hidden');
   }
+}
+
+/** 1 → "1st", 2 → "2nd", 11 → "11th" … */
+export function ordinal(n) {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
+  return `${n}${suffix}`;
 }
 
 export function formatTime(seconds) {

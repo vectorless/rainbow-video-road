@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TrackFrame } from '../track/TrackPath.js';
+import { MAX_SPEED } from '../kart/Kart.js';
 
 const MODES = [
   { name: 'chase', back: 9.5, up: 3.6, lookAhead: 10, lookUp: 1.2, lateral: 0.35, speedPull: 2.5 },
@@ -47,13 +48,23 @@ export class ChaseCamera {
   follow(kart, dt) {
     const mode = this.mode;
     const path = this.path;
-    const speedRatio = THREE.MathUtils.clamp(Math.abs(kart.speed) / 64, 0, 1);
+    const speedRatio = THREE.MathUtils.clamp(Math.abs(kart.speed) / MAX_SPEED, 0, 1);
 
     if (kart.state === 'falling') {
       // keep looking at the tumbling kart from where we were, drifting gently upward
       this.desiredTarget.copy(kart.position);
       this.desiredPos.y += dt * 1.5;
       this.#apply(dt, 2.5);
+      return;
+    }
+    if (kart.state === 'rescue') {
+      // drift back to a high spot behind the drop point, watching the kart being carried
+      const s = kart.rescueTargetS - mode.back * 1.4;
+      path.pointAt(s, 0, mode.up + 5, this.desiredPos, path.frameAt(s, this.frame));
+      // aim between the kart and the god so both stay in frame
+      this.desiredTarget.copy(kart.position).lerp(kart.rescuer.position, 0.35);
+      this.up.lerp(this.frame.normal, Math.min(1, dt * 2)).normalize();
+      this.#apply(dt, 1.6);
       return;
     }
 

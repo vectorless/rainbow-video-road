@@ -1,28 +1,37 @@
 import * as THREE from 'three';
 import { TrackFrame } from '../track/TrackPath.js';
 import { KartModel } from './KartModel.js';
+import { SpaceGod } from './SpaceGod.js';
 
-export const MAX_SPEED = 64; // world units / s at full throttle, no boost
+export const MAX_SPEED = 32; // world units / s at full throttle, no boost (halved for now; was 64)
 const ACCEL = 30;
 const DRAG = ACCEL / MAX_SPEED; // so terminal velocity == MAX_SPEED
 const BRAKE = 55;
 const REVERSE_MAX = 16;
 const KART_HALF_WIDTH = 0.95;
-const FALL_RESPAWN_SECONDS = 2.2;
+const FALL_RESCUE_DELAY = 0.4; // seconds of falling before the space god swoops in (soon, before the kart drops out of sight under the road)
+const LANDING_SPEED = 6; // speed the kart is set down with, so it rolls straight off
 
 /**
  * Arcade kart that lives in track space: a distance `s` along the path and a
  * lateral offset from the centreline. Steering changes the heading angle relative
  * to the road, which converts speed into lateral motion. Falling off switches to a
- * free-fall ballistic state until the kart is put back on the road.
+ * free-fall ballistic state; then the kart's space god (`rescuer`, which the owner
+ * adds to the scene) carries it back to the last safe spot on the road.
  */
 export class Kart {
-  constructor(path) {
+  /**
+   * @param {import('../track/TrackPath.js').TrackPath} path
+   * @param {object} [opts]
+   * @param {THREE.Object3D & { animate(dt:number, s:object):void }} [opts.model] defaults to the built-in kart
+   */
+  constructor(path, { model = new KartModel() } = {}) {
     this.path = path;
-    this.model = new KartModel();
+    this.model = model;
+    this.rescuer = new SpaceGod();
     this.frame = new TrackFrame();
 
-    this.state = 'driving'; // 'driving' | 'falling'
+    this.state = 'driving'; // 'driving' | 'falling' | 'rescue'
     this.s = 0;
     this.lateral = 0;
     this.speed = 0;
@@ -43,16 +52,17 @@ export class Kart {
 
     this.rails = true;
     this.hue = 0;
+    this.topSpeedScale = 1; // AI pace / rubber-banding; the player stays at 1
 
     this._tmpM = new THREE.Matrix4();
     this._tmpQ = new THREE.Quaternion();
     this._tmpV = new THREE.Vector3();
   }
 
-  reset(s = 0) {
+  reset(s = 0, lateral = 0) {
     this.state = 'driving';
     this.s = s;
-    this.lateral = 0;
+    this.lateral = lateral;
     this.speed = 0;
     this.steer = 0;
     this.heading = 0;
@@ -65,6 +75,7 @@ export class Kart {
     this.lastSafeS = s;
     this.model.scale.setScalar(1);
     this.model.visible = true;
+    this.rescuer.cancel();
     this.syncModel();
   }
 
@@ -82,6 +93,11 @@ export class Kart {
       this.#updateFalling(dt);
       return;
     }
+    if (this.state === 'rescue') {
+      this.#updateRescue(dt);
+      return;
+    }
+    this.rescuer.update(dt, this.model, this.hue); // flying off after a rescue
 
     const path = this.path;
     const throttle = controlsEnabled ? input.throttle : 0;
@@ -91,8 +107,8 @@ export class Kart {
     // --- longitudinal
     const boosting = this.boost > 0;
     if (boosting) this.boost -= dt;
-    const maxSpeed = MAX_SPEED * (boosting ? 1.35 : 1);
-    const accel = ACCEL * (boosting ? 1.8 : 1);
+    const maxSpeed = MAX_SPEED * this.topSpeedScale * (boosting ? 1.35 : 1);
+    const accel = ACCEL * this.topSpeedScale * (boosting ? 1.8 : 1);
 
     if (throttle > 0) {
       this.speed += throttle * accel * dt;
@@ -183,15 +199,18 @@ export class Kart {
     const frame = this.path.frameAt(this.s, this.frame);
     const m = this.model;
     this.path.pointAt(this.s, this.lateral, 0, m.position, frame);
+    // yaw by heading (+ a bit of drift exaggeration)
+    this.#roadQuaternion(frame, -(this.heading + (this.drifting ? this.driftDir * 0.25 : 0)), m.quaternion);
+  }
 
+  /** Orientation of a kart sitting on the road at `frame`, turned by `yaw`. */
+  #roadQuaternion(frame, yaw, out) {
     // basis: x = right, y = normal, z = right × normal (= backwards)
     const z = this._tmpV.crossVectors(frame.right, frame.normal);
     this._tmpM.makeBasis(frame.right, frame.normal, z);
-    m.quaternion.setFromRotationMatrix(this._tmpM);
-    // yaw by heading (+ a bit of drift exaggeration)
-    const yaw = -(this.heading + (this.drifting ? this.driftDir * 0.25 : 0));
+    out.setFromRotationMatrix(this._tmpM);
     this._tmpQ.setFromAxisAngle(frame.normal, yaw);
-    m.quaternion.premultiply(this._tmpQ);
+    return out.premultiply(this._tmpQ);
   }
 
   #startFalling(frame) {
@@ -214,12 +233,35 @@ export class Kart {
     this.model.rotateX(dt * 1.2);
     this.model.rotateZ(dt * 0.8);
     this.model.animate(dt, { speed: this.speed, steer: 0, drift: 0, boost: 0, hue: this.hue });
-    if (this.fallTime > FALL_RESPAWN_SECONDS) {
-      this.respawn();
+    this.rescuer.update(dt, this.model, this.hue); // a previous rescue may still be flying off
+    if (this.fallTime > FALL_RESCUE_DELAY) this.#beginRescue();
+  }
+
+  #beginRescue() {
+    this.state = 'rescue';
+    const frame = this.path.frameAt(this.lastSafeS, this.frame);
+    const dropoff = this.path.pointAt(this.lastSafeS, 0, 0, new THREE.Vector3(), frame);
+    const dropQuat = this.#roadQuaternion(frame, 0, new THREE.Quaternion());
+    this.rescuer.begin(this.model, dropoff, dropQuat, frame.normal);
+  }
+
+  #updateRescue(dt) {
+    this.speed *= Math.max(0, 1 - dt * 3); // wheels spin down while carried
+    this.model.animate(dt, { speed: this.speed, steer: 0, drift: 0, boost: 0, hue: this.hue });
+    if (this.rescuer.update(dt, this.model, this.hue)) {
+      this.respawn({ keepRescuer: true });
+      this.speed = LANDING_SPEED;
     }
   }
 
-  respawn() {
+  /** Where a rescued kart is heading back to (camera uses this). */
+  get rescueTargetS() {
+    return this.lastSafeS;
+  }
+
+  /** Put the kart back on the road at the last safe spot, at once. */
+  respawn({ keepRescuer = false } = {}) {
+    if (!keepRescuer) this.rescuer.cancel();
     this.state = 'driving';
     this.s = this.lastSafeS;
     this.lateral = 0;
@@ -227,7 +269,7 @@ export class Kart {
     this.heading = 0;
     this.steer = 0;
     this.lateralVel = 0;
-    this.respawnFlash = 1.2;
+    this.respawnFlash = keepRescuer ? 0.5 : 1.2;
     this.syncModel();
   }
 }

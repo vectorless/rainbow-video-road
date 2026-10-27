@@ -3,6 +3,12 @@
  * Every value here is tunable from the in-game settings panel.
  */
 const STORAGE_KEY = 'rainbow-video-road.settings.v1';
+// Bump when a default changes in a way saved settings should pick up; see MIGRATIONS.
+const SCHEMA = 2;
+// schema → keys whose saved values are dropped when upgrading past it
+const MIGRATIONS = {
+  2: ['rails'], // rails became opt-in (the space god rescues fallers instead)
+};
 
 export const DEFAULTS = Object.freeze({
   // Video slat look
@@ -20,7 +26,9 @@ export const DEFAULTS = Object.freeze({
   randomStart: true,
 
   // Race
-  rails: true,
+  rails: false, // off: fall off the edge and the space god carries you back
+  rivals: true,
+  rivalPace: 0.95, // rival top speed vs the player's
   laps: 3,
   seed: 1337,
 
@@ -79,9 +87,12 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
+    const from = Number(parsed._schema) || 1;
+    const dropped = new Set();
+    for (let v = from + 1; v <= SCHEMA; v++) for (const key of MIGRATIONS[v] || []) dropped.add(key);
     const out = {};
     for (const key of Object.keys(DEFAULTS)) {
-      if (key in parsed) out[key] = coerce(key, parsed[key]);
+      if (key in parsed && !dropped.has(key)) out[key] = coerce(key, parsed[key]);
     }
     return out;
   } catch {
@@ -91,7 +102,7 @@ function load() {
 
 function save(values) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(values));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...values, _schema: SCHEMA }));
   } catch {
     /* storage unavailable (private mode etc.) — settings just won't persist */
   }
