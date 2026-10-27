@@ -1,7 +1,8 @@
 // Minimal Chrome DevTools Protocol driver for smoke-testing the game.
-// usage: (with `npm run dev` running) node scripts/smoke-cdp.mjs <race|fall|misc|items|laser|gallery|editor|remap> <outdir>
+// usage: (with `npm run dev` running) node scripts/smoke-cdp.mjs <race|fall|misc|items|laser|gallery|editor|remap|og> <outdir>
 // Drives headless Google Chrome (macOS path below) over the DevTools protocol and
-// writes screenshots + state logs to <outdir>. See docs/SPEC.md §6.
+// writes screenshots + state logs to <outdir>. `og` stages and saves the social preview
+// image (<outdir>/og-image.jpg → copy to public/). See docs/SPEC.md §6.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
@@ -45,7 +46,8 @@ const key = (type, k, code, keyCode) => send('Input.dispatchKeyEvent', { type, k
 
 await send('Runtime.enable');
 await send('Page.enable');
-await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+const VIEW = scenario === 'og' ? [1200, 630] : [1280, 720];
+await send('Emulation.setDeviceMetricsOverride', { width: VIEW[0], height: VIEW[1], deviceScaleFactor: 1, mobile: false });
 await send('Page.navigate', { url: 'http://localhost:5173/' });
 await sleep(2500);
 
@@ -62,7 +64,38 @@ console.log('grid', await evaluate(STATE));
 await sleep(3500);
 await key('keyDown', 'ArrowUp', 'ArrowUp', 38);
 
-if (scenario === 'race') {
+if (scenario === 'og') {
+  // Staged social preview: karts heading into a row of item boxes, a laser shot, a shield, the title on top.
+  const E = (label, js) => evaluate(js).then((v) => console.log(label, v));
+  await sleep(2500);
+  await E('stage', `(() => {
+    const g = __rainbowRoad.game; const p = g.path; g.pause();
+    for (const id of ['pause', 'hud', 'settings-toggle']) document.getElementById(id).classList.add('hidden');
+    document.getElementById('settings-toggle').style.display = 'none';
+    const boxes = g.items.entries.filter((e) => e.type === 'itembox').sort((a, b) => a.s - b.s);
+    const row = boxes[0].s;
+    const put = (k, ds, lat) => { k.s = p.wrap(row + ds); k.lateral = lat; k.heading = 0; k.speed = 30; k.syncModel(); k.model.visible = true; };
+    const [princess, gorilla, mushroom] = g.rivals.active.map((r) => r.kart);
+    put(g.kart, -24, -1.6);
+    put(mushroom, -13.5, 2.2);
+    put(princess, -16.5, -4.4);
+    put(gorilla, -19, 4.3);
+    princess.giveShield(5); princess.gear.update(0.016, { shield: 5, laser: false, hue: 0 });
+    g.kart.held = { type: 'laser', charges: 3 }; g.kart.rolling = 0; g.kart.gear.update(0.016, { shield: 0, laser: true, hue: 0 });
+    for (const k of [g.kart, mushroom, princess, gorilla]) k.model.updateMatrixWorld(true);
+    g.items.useItem(g.kart, [g.kart]); // a shot down the road (no target, so nobody spins)
+    const cam = g.camera; p.pointAt(row - 31.5, -0.2, 3.4, cam.position); cam.up.copy(p.frameAt(row - 31.5).normal);
+    cam.lookAt(p.pointAt(row - 6, 0, 1.6)); cam.fov = 58; cam.updateProjectionMatrix();
+    const o = document.createElement('div');
+    o.innerHTML = '<h1 class="title" style="font-size:78px;margin:0"><span>Rainbow</span><span>Video</span><span>Road</span></h1>' +
+      '<p style="margin:10px 0 0;font-size:24px;font-weight:600;color:#f3f0ff;letter-spacing:0.02em;text-shadow:0 2px 12px rgba(0,0,0,0.8)">A kart racer on a road made of your own videos</p>';
+    o.style.cssText = 'position:fixed;inset:0 0 auto 0;padding:34px 0 80px;text-align:center;z-index:50;pointer-events:none;background:linear-gradient(rgba(7,5,15,0.82),rgba(7,5,15,0.45) 60%,rgba(7,5,15,0))';
+    document.body.appendChild(o);
+    return 'row at ' + row.toFixed(0); })()`);
+  await sleep(1500);
+  const r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 90 });
+  fs.writeFileSync(`${out}/og-image.jpg`, Buffer.from(r.result.data, 'base64'));
+} else if (scenario === 'race') {
   for (let i = 0; i < 6; i++) {
     await sleep(2500);
     console.log(`t+${(i + 1) * 2.5}s`, await evaluate(STATE));

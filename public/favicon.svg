@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="sky" cx="0.7" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#3a1460"/>
+      <stop offset="1" stop-color="#090615"/>
+    </radialGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#sky)"/>
+  <!-- stars -->
+  <circle cx="12" cy="12" r="1.3" fill="#fff"/>
+  <circle cx="50" cy="9" r="1" fill="#fff" opacity="0.8"/>
+  <circle cx="56" cy="24" r="1.2" fill="#fff" opacity="0.9"/>
+  <circle cx="7" cy="27" r="0.9" fill="#fff" opacity="0.7"/>
+  <!-- the road: six rainbow lanes running into the distance -->
+  <g filter="url(#glow)">
+    <path d="M4 60 L12.7 60 L30 16 L28.5 16 Z" fill="#ff3cac"/>
+    <path d="M12.7 60 L21.3 60 L31 16 L30 16 Z" fill="#ff8a1f"/>
+    <path d="M21.3 60 L30 60 L32 16 L31 16 Z" fill="#ffdd55"/>
+    <path d="M30 60 L38.7 60 L33 16 L32 16 Z" fill="#4cff9a"/>
+    <path d="M38.7 60 L47.3 60 L34 16 L33 16 Z" fill="#33ddff"/>
+    <path d="M47.3 60 L56 60 L35.5 16 L34 16 Z" fill="#8f7bff"/>
+  </g>
+  <!-- slat lines across the road -->
+  <path d="M10.4 48.5 H50.6 M17.6 35.5 H44.6 M22.3 27.2 H40.7 M25.5 21.4 H38" stroke="#090615" stroke-width="1.6" opacity="0.75"/>
+</svg>

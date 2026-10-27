@@ -251,6 +251,19 @@ There is no automated test suite. Verification so far:
   opening the editor mid-rescue hides everything, toggling rivals and pace live, the Pos
   readout hides when racing alone.
 
+## 6b. Hosting, link previews, icons
+
+- Repo: https://github.com/vectorless/rainbow-video-road (public). Every push to `main` builds
+  and deploys to **https://vectorless.github.io/rainbow-video-road/** via
+  `.github/workflows/pages.yml` (Pages source = GitHub Actions).
+- `index.html` carries Open Graph + Twitter card tags (`summary_large_image`). The og/twitter
+  image URLs are **absolute** (crawlers need that); update them if the site moves.
+- `public/og-image.jpg` (1200×630) is a staged in-game shot: `node scripts/smoke-cdp.mjs og <dir>`
+  re-creates it (player firing a laser, the princess shielded, all rivals, the item box row, and
+  the title overlay), then copy `<dir>/og-image.jpg` to `public/`.
+- Icons: `public/favicon.svg` (source), `favicon-32.png` and `apple-touch-icon.png` (180) rendered
+  from it with headless Chrome.
+
 ## 7. Known limitations and ideas
 
 - Top speed is temporarily halved; the AI pace and rubber band were tuned for 32 u/s.
