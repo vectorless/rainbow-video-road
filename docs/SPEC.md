@@ -25,10 +25,13 @@ to `dist/` (`base: './'`, so it works from any folder).
 | Area | What exists |
 | --- | --- |
 | Track | Closed centripetal Catmull-Rom spline, seeded generator (wobbly loops or figure-8s that bridge over themselves), automatic banking, slat mesh with video tiles, start gate, optional guard rails |
-| Editor | Top-down map + elevation strip, live 3D rebuild, add/move/remove points, width/banking sliders, set start, warnings (tight corners, steep slopes, low-clearance crossings), undo/redo, save to the browser, export/import JSON, share links in the URL hash, test drive |
+| Editor | Top-down map + elevation strip, live 3D rebuild, add/move/remove points, width/banking sliders, **banking set by hand per point**, **item placement tools**, set start, warnings (tight corners, steep slopes, low-clearance crossings), undo/redo, save to the browser, export/import JSON, share links in the URL hash, test drive |
 | Driving | Arcade model in track space: throttle, brake/reverse, steering, drift → mini-turbo, sideways push on bends softened by banking, falling off the edge |
-| Rivals | 2 AI racers using imported GLB models (princess, gorilla), starting grid, bumping between karts, race position (`Pos 2nd/3`) in the HUD, finish placing in the finish toast |
-| Space god | When a kart (player or rival) falls off, a procedural "space god" swoops in, beams it up, carries it back and sets it down on the road |
+| Rivals | 3 AI racers using imported GLB models (princess, gorilla, mushroom charioteer), starting grid, bumping between karts, race position (`Pos 2nd/4`) in the HUD, finish placing in the finish toast; they dodge obstacles, collect pickups and use items |
+| Space god | When a kart (player or rival) falls off, the space god (imported Cthulhu model + rainbow halo + tractor beam) swoops in, beams it up, carries it back and sets it down on the road |
+| Pickups | Item box (random held item after a 0.8 s roulette), boost orb, shield (6 s), coin (+1.2% top speed each, max 10; lose half on falling, 2 on a spin-out). Collected pickups come back after a few seconds |
+| Held items | Boost, shield, laser (3 shots; side cannons appear on the kart; hitscan along the road, spins the first kart hit, a shield absorbs it), cone and mud (dropped behind you). Use with `E` / LB / RB |
+| Obstacles | Block (solid: ricochet back, spin, stop), cone (knocked flying, bounces, drops off the road, comes back after 10 s), mud (top speed ×0.45 while on it). A shield ignores mud/cone slowdown and block spin-outs |
 | Camera | Chase / far / hood modes (`C`), speed-sensitive FOV, menu fly-over, special framing while falling and while being rescued |
 | Video | Pool of `<video>` decoders (default 8) dealt clips round-robin and rotated every N seconds; procedural fallback textures before clips load |
 | Settings | Persisted in localStorage, all editable in the in-game settings panel |
@@ -50,14 +53,18 @@ src/kart/KartModel.js        the player's kart, built from primitives
 src/kart/FigureKartModel.js  wraps an imported GLB as a kart (same interface as KartModel)
 src/kart/AIDriver.js         computer driver: outputs {throttle, steer, drift} like the player's input
 src/kart/Rivals.js           rival roster, model loading, grid placement, bumping, progress/placing
-src/kart/SpaceGod.js         the rescuer figure and its rescue animation
+src/kart/SpaceGod.js         the rescuer (Cthulhu model, primitive stand-in until loaded) and its rescue animation
+src/kart/KartGear.js         shield bubble + laser cannons bolted onto any kart model
+src/track/trackItems.js      item types (ITEM_TYPES), placement format + validation, remap helpers, generateItems
+src/items/ItemSystem.js      item runtime: meshes, collisions/effects, respawns, flying cones, dropped items, lasers
+src/items/itemMeshes.js      item meshes (shared geometry/materials) and the laser beam
 src/kart/Input.js            keyboard + gamepad → axes + edge-triggered actions
 src/camera/ChaseCamera.js    camera modes
 src/world/Space.js           stars, nebulae, planets, the hemisphere + directional lights
 src/video/                   VideoPool, folder picking, fallback textures
 src/ui/Hud.js                HUD (speed, position, lap, times, boost, toasts, countdown)
 src/ui/SettingsPanel.js      binds [data-setting] controls to Settings
-public/models/               optimised rival models (blonde.glb, gorilla.glb, ~1.4 MB each)
+public/models/               optimised models: blonde, gorilla, mushroom (rivals), cthulhu (space god)
 incoming/                    raw model drops from the user (git-ignored, 40–100 MB each)
 ```
 
@@ -107,6 +114,25 @@ Race state (`this.race`): `lap`, `lapsTotal`, `time`, `lapTime`, `best`, `finish
 `finishTime`, `prevS`, `lapDistance` (for lap counting, resets each lap and is penalised for
 driving backwards over the line), `progress` (total signed distance driven since the start,
 never reset, used for positions), `startS`.
+
+### 4.4b Items (`trackItems.js`, `ItemSystem.js`)
+- Track JSON `items: [{ type, seg, u, x }]`: anchored to control-point segment `seg`, fraction
+  `u` of its arc length, `x` = lateral / halfWidth. **Any editor operation that renumbers
+  points must remap items**: `remapItemsForInsert / ForDelete / ForRotate` (verified: rotate and
+  delete leave other items exactly in place; insert moves them ≤ ~1 unit as the curve reshapes).
+- Optional 4th number on a point = banking set by hand in degrees (±45, positive lifts the right
+  edge). `TrackPath.#applyPointBanks` eases from point to point (smoothstep); a hand-set point next
+  to an automatic one blends into the automatic bank.
+- `ITEM_TYPES[type]` gives `kind` (pickup/obstacle), trigger half-extents `hitS`/`hitL`,
+  `respawn`, and editor colour. Collision is a track-space box test against a kart box
+  1.5 × 0.9 half-extents.
+- Kart-side item state lives on `Kart` (`shield`, `spinTime`, `coins`, `inMud`, `held`,
+  `rolling`) with methods `spinOut`, `giveBoost`, `giveShield`, `addCoin`, `rollItem`,
+  `takeItem`. `inMud` is reset and set by the ItemSystem each frame.
+- `ItemSystem.onEvent(kart, what)` reports events (`boost`, `shield`, `block`, `lasered`,
+  `laser-hit`, `shield-pop`, …); `main.js` turns the player's into toasts.
+- Items beyond the road fog distance are hidden (`viewDistance`, set by `#setFog`), because
+  standard materials aren't fogged the way the slat shader is.
 
 ### 4.5 Settings (`core/settings.js`)
 Add a key to `DEFAULTS`, a control with `data-setting="key"` in `index.html` (and a
@@ -185,6 +211,27 @@ via `this._tmp…` to avoid allocations every frame.
    placing.
 6. **README** updated (rivals, space god, how to add a rival model, code map).
 
+## 5b. Work done on 2026-10-27, later session: items, laser, banking, new models
+
+1. **Pickups, held items and obstacles** as above, placeable in the editor, generated for seeded
+   tracks (`generateItems`: 2–3 rows of 4 item boxes, 3 boosts, 3 lines of 5 coins, a shield,
+   3 blocks, 2 clusters of 3 cones, 2 mud patches, kept away from the start).
+2. **Laser** (user request): a held item from item boxes, 3 shots, twin cannons on the kart
+   (`KartGear`), a beam drawn as a tube following the road, range 75, hit width 1.8.
+3. **AI**: `AIDriver.#itemLine` steers round the nearest obstacle in its line (24 ahead) or
+   toward a wanted pickup (32 ahead, ≤4 off the line); `#decideItem` uses boosts on straights,
+   shields near obstacles or after 5 s, lasers when a kart is lined up ahead, and drops
+   cones/mud on someone close behind.
+4. **Banking per point** in the editor (user request: "banking segments, not just the whole track").
+5. **New models**: `mushroom.glb` (third rival; from `incoming/Meshy_AI_mushroom_chariot_*`,
+   simplify ratio 0.006 → 29k tris) and `cthulhu.glb` (space god; already 31k tris, only
+   textures resized). Cthulhu faces +Z; `SpaceGod` turns it, scales to 7 units, puts its claws at
+   the beam origin, and hangs the kart 4.2 below.
+6. **Mushroom "turn the wheel" animation: not done.** The user believed the mushroom model was
+   rigged, but the supplied GLB has no skin or animations (1 node, 1 mesh). They were asked to
+   provide the rigged export; when it arrives, drive the arm/hand bones from `steer` in a
+   model-specific `animate()`.
+
 ## 6. Testing approach
 
 There is no automated test suite. Verification so far:
@@ -195,6 +242,10 @@ There is no automated test suite. Verification so far:
   and saves screenshots. Software WebGL (SwiftShader) is slow, so wall-clock waits in the
   script are much longer in game time than they look. Judge with game-state values
   (`g.time`, `g.state`), not wall time.
+- Scenarios: `race`, `fall`, `misc` (rival rescue, `R` mid-rescue, editor mid-rescue, settings),
+  `items` (counts, block/cone/mud/drop), `laser`, `gallery` (paused close-ups of every item, the
+  beam and the shield), `editor` (place/drag an item with real mouse events, per-point banking,
+  share-link round trip), `remap` (items keep their world position across point edits).
 - Things checked: rivals load (2), follow the line at ~26 u/s without falling off, the
   rescue goes `falling → rescue → driving` for the player and the rivals, `R` mid-rescue,
   opening the editor mid-rescue hides everything, toggling rivals and pace live, the Pos
@@ -207,9 +258,12 @@ There is no automated test suite. Verification so far:
 - Rival models are rigid, so there are no spinning wheels.
 - The space god is built from primitives; it could be swapped for a generated model using the
   same `gltf-transform` pipeline (it must stay light-free).
-- Only 2 rivals (one per model); `ROSTER` in `Rivals.js` can take more entries, and the grid
+- 3 rivals (one per model); `ROSTER` in `Rivals.js` can take more entries, and the grid
   adapts to the count.
+- A shielded kart doesn't knock others about in bumps (it just keeps its speed); a possible extra.
+- The item roulette isn't weighted by race position yet.
 - Rivals are not drawn on the editor map, and there's no minimap.
 - The player always starts at the back of the grid.
 - Possible next steps the user has mentioned: **deliberate barriers** (likely per-section, in the
-  editor).
+  editor), **mushroom driver steering animation** (needs a rigged model), **GitHub Pages**
+  deployment.

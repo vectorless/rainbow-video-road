@@ -12,6 +12,7 @@ import { createSharedUniforms } from './track/slatShader.js';
 import { Space } from './world/Space.js';
 import { Kart } from './kart/Kart.js';
 import { Rivals } from './kart/Rivals.js';
+import { ItemSystem } from './items/ItemSystem.js';
 import { Input } from './kart/Input.js';
 import { ChaseCamera } from './camera/ChaseCamera.js';
 import { VideoPool } from './video/VideoPool.js';
@@ -104,7 +105,11 @@ class Game {
     this.input = new Input(window);
     this.chase = new ChaseCamera(this.camera, null);
 
+    this.items = new ItemSystem(this.scene);
+    this.items.onEvent = (kart, what) => this.#onItemEvent(kart, what);
+
     this.rivals = new Rivals(this.scene);
+    this.rivals.items = this.items;
     this.rivals.enabled = s.get('rivals');
     this.rivals.setPace(s.get('rivalPace'));
     this.rivals.setRails(s.get('rails'));
@@ -116,6 +121,25 @@ class Game {
 
     this.#buildTrack();
     this.#setKartsVisible(false);
+  }
+
+  /** Every kart on the road: the player first, then the rivals taking part. */
+  #karts() {
+    return [this.kart, ...this.rivals.active.map((r) => r.kart)];
+  }
+
+  /** Item happenings worth a toast (only the player's own). */
+  #onItemEvent(kart, what) {
+    if (kart !== this.kart) return;
+    const text = {
+      boost: 'Boost!',
+      shield: 'Shield!',
+      block: 'Ouch!',
+      lasered: 'Zapped!',
+      'laser-hit': 'Direct hit!',
+      'shield-pop': 'Shield took the hit',
+    }[what];
+    if (text) this.hud.toast(text, 900);
   }
 
   /** Karts are hidden on the menu and in the editor. */
@@ -184,6 +208,7 @@ class Game {
     this.kart.reset(0);
     this.scene.add(this.kart.model, this.kart.rescuer);
     this.rivals.setPath(this.path);
+    this.items.build(this.path);
 
     this.chase.setPath(this.path);
     this.chase.flyS = 0;
@@ -435,6 +460,7 @@ class Game {
     this.#flushTrackStore();
 
     startS = this.path.wrap(startS);
+    this.items.reset();
     const slot = this.#placeGrid(startS);
     this.kart.reset(this.path.wrap(slot.s), slot.lateral);
     this.#setKartsVisible(true);
@@ -515,6 +541,7 @@ class Game {
       u.uFogNear.value = 140;
       u.uFogFar.value = 420;
     }
+    this.items.viewDistance = u.uFogFar.value + 10; // items vanish where the road fogs out
   }
 
   /* ------------------------------------------------------------------ */
@@ -537,15 +564,18 @@ class Game {
     switch (this.state) {
       case 'menu':
         this.chase.flyOver(dt, this.time);
+        this.items.update(dt, [], this.camera.position, this.time * this.settings.get('hueSpeed'));
         break;
       case 'countdown':
         this.kart.update(dt, this.input, false);
         this.rivals.update(dt, this.kart, this.race, false);
+        this.items.update(dt, this.#karts(), this.camera.position, this.kart.hue);
         this.chase.follow(this.kart, dt);
         break;
       case 'racing':
         this.kart.update(dt, this.input, true);
         this.rivals.update(dt, this.kart, this.race, true);
+        this.items.update(dt, this.#karts(), this.camera.position, this.kart.hue);
         this.#updateRace(dt);
         this.chase.follow(this.kart, dt);
         break;
@@ -553,6 +583,7 @@ class Game {
         break;
       case 'editor':
         this.editor.update(dt);
+        this.items.update(dt, [], this.camera.position, this.time * this.settings.get('hueSpeed'));
         break;
       default:
         break;
@@ -571,6 +602,9 @@ class Game {
         finished: r.finished,
         place: this.rivals.placeOf(r.progress, r.finishTime),
         racers: this.rivals.active.length + 1,
+        item: this.kart.held && { type: this.kart.held.type, charges: this.kart.held.charges, rolling: this.kart.rolling > 0 },
+        coins: this.kart.coins,
+        shield: this.kart.shield,
       });
     }
 
@@ -603,6 +637,7 @@ class Game {
         this.hud.toast('Reset', 700);
       }
     }
+    if (a.item && this.state === 'racing') this.items.useItem(this.kart, this.#karts());
     if (a.camera && this.state !== 'menu' && this.state !== 'editor') {
       const name = this.chase.nextMode();
       this.hud.toast(`${name} cam`, 800);

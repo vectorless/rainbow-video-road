@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { makeRandom } from '../core/prng.js';
+import { validateItems, generateItems } from './trackItems.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const MAX_BANK = THREE.MathUtils.degToRad(34);
 const BANK_GAIN = 30; // radians of bank per unit of signed curvature (before clamping)
+export const MAX_POINT_BANK = 45; // degrees, for banking set by hand on a control point
 
 export const TRACK_FORMAT_VERSION = 1;
 export const DEFAULT_WIDTH = 14;
@@ -28,8 +30,14 @@ export class TrackPath {
    * @param {number} [opts.bankStrength] 0 = flat road, 1 = default auto-banking
    * @param {string} [opts.name]
    * @param {string} [opts.kind] informational ("loop", "figure8", "custom")
+   * @param {(number|null)[]} [opts.pointBanks] per control point: banking in degrees set by
+   *   hand (positive lifts the right edge, as for a left turn), or null for automatic
+   * @param {object[]} [opts.items] pickups and obstacles (see trackItems.js)
    */
-  constructor(points, { width = DEFAULT_WIDTH, seed = 1, bankStrength = 1, name = '', kind = 'custom' } = {}) {
+  constructor(
+    points,
+    { width = DEFAULT_WIDTH, seed = 1, bankStrength = 1, name = '', kind = 'custom', pointBanks = [], items = [] } = {},
+  ) {
     if (!Array.isArray(points) || points.length < MIN_POINTS) {
       throw new Error(`A track needs at least ${MIN_POINTS} control points`);
     }
@@ -40,20 +48,24 @@ export class TrackPath {
     this.bankStrength = bankStrength;
     this.name = name;
     this.kind = kind;
+    this.pointBanks = this.points.map((_, i) => (Number.isFinite(pointBanks[i]) ? pointBanks[i] : null));
 
     this.curve = new THREE.CatmullRomCurve3(this.points, true, 'centripetal', 0.5);
     this.curve.arcLengthDivisions = 4000;
     this.length = this.curve.getLength();
 
     this.sampleCount = Math.max(600, Math.round(this.length));
-    this.#sample();
     this.#computePointArcLengths();
+    this.#sample();
+    this.items = validateItems(items, this.points.length);
   }
 
-  /** Procedural track from a seed (the classic "shuffle" layouts). */
+  /** Procedural track from a seed (the classic "shuffle" layouts), with a seeded sprinkle of items. */
   static generate(seed, opts = {}) {
     const { points, kind } = buildControlPoints(seed);
-    return new TrackPath(points, { seed, kind, name: `Generated #${seed}`, ...opts });
+    const path = new TrackPath(points, { seed, kind, name: `Generated #${seed}`, ...opts });
+    path.items = generateItems(path, seed);
+    return path;
   }
 
   /** Build from the JSON track format (see `toJSON`). Throws on invalid data. */
@@ -61,7 +73,15 @@ export class TrackPath {
     const t = validateTrackData(data);
     return new TrackPath(
       t.points.map(([x, y, z]) => new THREE.Vector3(x, y, z)),
-      { width: t.width, seed: t.seed, bankStrength: t.bankStrength, name: t.name, kind: 'custom' },
+      {
+        width: t.width,
+        seed: t.seed,
+        bankStrength: t.bankStrength,
+        name: t.name,
+        kind: 'custom',
+        pointBanks: t.points.map((p) => (p.length > 3 ? p[3] : null)),
+        items: t.items,
+      },
     );
   }
 
@@ -73,7 +93,13 @@ export class TrackPath {
       width: round1(this.width),
       bankStrength: round2(this.bankStrength),
       seed: this.seed,
-      points: this.points.map((p) => [round1(p.x), round1(p.y), round1(p.z)]),
+      // a 4th number is banking set by hand at that point (degrees)
+      points: this.points.map((p, i) => {
+        const out = [round1(p.x), round1(p.y), round1(p.z)];
+        if (this.pointBanks[i] != null) out.push(round1(this.pointBanks[i]));
+        return out;
+      }),
+      items: this.items.map((it) => ({ ...it })),
     };
   }
 
@@ -183,6 +209,7 @@ export class TrackPath {
       acc /= window + 1; // triangle filter weights sum to (window + 1)
       banks[i] = THREE.MathUtils.clamp(acc * gain, -MAX_BANK, MAX_BANK);
     }
+    this.#applyPointBanks(banks);
 
     // Pass 3: moving frame. right0 = T × up, then roll about T by the bank angle.
     const right0 = new THREE.Vector3();
@@ -218,6 +245,33 @@ export class TrackPath {
     }
     this.minY = minY;
     this.maxY = maxY;
+  }
+
+  /**
+   * Banking set by hand on control points. Between two points the bank eases from one
+   * point's value to the next; a point left on automatic contributes the automatic bank,
+   * so a hand-set point blends smoothly into its automatic neighbours, and a run of
+   * hand-set points makes a banked section.
+   */
+  #applyPointBanks(banks) {
+    const pb = this.pointBanks;
+    if (pb.every((b) => b == null)) return;
+    const n = pb.length;
+    const N = this.sampleCount;
+    const arc = this.pointArcLengths;
+    const rad = THREE.MathUtils.degToRad;
+    let seg = 0;
+    for (let i = 0; i < N; i++) {
+      const s = (i / N) * this.length;
+      while (seg < n - 1 && s >= arc[seg + 1]) seg++;
+      const a = pb[seg];
+      const b = pb[(seg + 1) % n];
+      if (a == null && b == null) continue;
+      const end = seg + 1 < n ? arc[seg + 1] : this.length;
+      const f = THREE.MathUtils.smoothstep((s - arc[seg]) / Math.max(1e-6, end - arc[seg]), 0, 1);
+      const auto = banks[i];
+      banks[i] = (a == null ? auto : rad(a)) * (1 - f) + (b == null ? auto : rad(b)) * f;
+    }
   }
 
   /** Arc-length position of every control point (the spline passes through point i at t = i/n). */
@@ -272,16 +326,19 @@ export function validateTrackData(data) {
   if (data.points.length < MIN_POINTS) throw new Error(`Track needs at least ${MIN_POINTS} points`);
   if (data.points.length > MAX_POINTS) throw new Error(`Track has too many points (max ${MAX_POINTS})`);
   const points = data.points.map((p, i) => {
-    if (!Array.isArray(p) || p.length !== 3 || !p.every((v) => Number.isFinite(v))) {
-      throw new Error(`Point ${i} is not [x, y, z]`);
+    if (!Array.isArray(p) || (p.length !== 3 && p.length !== 4) || !p.slice(0, 3).every((v) => Number.isFinite(v))) {
+      throw new Error(`Point ${i} is not [x, y, z] or [x, y, z, bank]`);
     }
-    return [clampNum(p[0], -5000, 5000), clampNum(p[1], -500, 500), clampNum(p[2], -5000, 5000)];
+    const out = [clampNum(p[0], -5000, 5000), clampNum(p[1], -500, 500), clampNum(p[2], -5000, 5000)];
+    if (p.length === 4 && Number.isFinite(p[3])) out.push(clampNum(p[3], -MAX_POINT_BANK, MAX_POINT_BANK));
+    return out;
   });
   const width = Number.isFinite(data.width) ? clampNum(data.width, 6, 40) : DEFAULT_WIDTH;
   const bankStrength = Number.isFinite(data.bankStrength) ? clampNum(data.bankStrength, 0, 2) : 1;
   const seed = Number.isFinite(data.seed) ? data.seed >>> 0 : 1;
   const name = typeof data.name === 'string' ? data.name.slice(0, 60) : 'Untitled track';
-  return { version: TRACK_FORMAT_VERSION, name, width, bankStrength, seed, points };
+  const items = validateItems(data.items, points.length);
+  return { version: TRACK_FORMAT_VERSION, name, width, bankStrength, seed, points, items };
 }
 
 function clampNum(v, a, b) {

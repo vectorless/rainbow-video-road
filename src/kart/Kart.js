@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { TrackFrame } from '../track/TrackPath.js';
 import { KartModel } from './KartModel.js';
 import { SpaceGod } from './SpaceGod.js';
+import { KartGear } from './KartGear.js';
 
 export const MAX_SPEED = 32; // world units / s at full throttle, no boost (halved for now; was 64)
 const ACCEL = 30;
@@ -11,6 +12,11 @@ const REVERSE_MAX = 16;
 const KART_HALF_WIDTH = 0.95;
 const FALL_RESCUE_DELAY = 0.4; // seconds of falling before the space god swoops in (soon, before the kart drops out of sight under the road)
 const LANDING_SPEED = 6; // speed the kart is set down with, so it rolls straight off
+const MAX_COINS = 10;
+const COIN_BONUS = 0.012; // top speed per coin
+const MUD_SPEED = 0.45; // top speed in mud
+const ITEM_ROLL_SECONDS = 0.8; // item box roulette before the item can be used
+export const LASER_SHOTS = 3;
 
 /**
  * Arcade kart that lives in track space: a distance `s` along the path and a
@@ -18,6 +24,9 @@ const LANDING_SPEED = 6; // speed the kart is set down with, so it rolls straigh
  * to the road, which converts speed into lateral motion. Falling off switches to a
  * free-fall ballistic state; then the kart's space god (`rescuer`, which the owner
  * adds to the scene) carries it back to the last safe spot on the road.
+ *
+ * Item effects live here too (shield, spin-out, coins, mud, the held item); the
+ * ItemSystem decides when they happen.
  */
 export class Kart {
   /**
@@ -28,6 +37,8 @@ export class Kart {
   constructor(path, { model = new KartModel() } = {}) {
     this.path = path;
     this.model = model;
+    this.gear = new KartGear(model);
+    model.add(this.gear);
     this.rescuer = new SpaceGod();
     this.frame = new TrackFrame();
 
@@ -54,6 +65,18 @@ export class Kart {
     this.hue = 0;
     this.topSpeedScale = 1; // AI pace / rubber-banding; the player stays at 1
 
+    // item effects
+    this.shield = 0; // seconds of shield left
+    this.spinTime = 0; // seconds of spin-out left (no control)
+    this.spinDuration = 1;
+    this.spinDir = 1;
+    this.spinYaw = 0;
+    this.coins = 0;
+    this.inMud = false; // set each frame by the ItemSystem
+    /** @type {{ type:string, charges:number } | null} */
+    this.held = null;
+    this.rolling = 0; // item box roulette time left; `held` is usable when it reaches 0
+
     this._tmpM = new THREE.Matrix4();
     this._tmpQ = new THREE.Quaternion();
     this._tmpV = new THREE.Vector3();
@@ -73,10 +96,63 @@ export class Kart {
     this.boostLevel = 0;
     this.fallTime = 0;
     this.lastSafeS = s;
+    this.shield = 0;
+    this.spinTime = 0;
+    this.spinYaw = 0;
+    this.coins = 0;
+    this.inMud = false;
+    this.held = null;
+    this.rolling = 0;
     this.model.scale.setScalar(1);
     this.model.visible = true;
     this.rescuer.cancel();
     this.syncModel();
+  }
+
+  /* ------------------------------ item effects ------------------------------ */
+
+  /** Knocked into a spin: no control for a moment, speed bleeds away. False if shielded. */
+  spinOut(duration = 1.1) {
+    if (this.shield > 0 || this.state !== 'driving') return false;
+    if (this.spinTime <= 0) this.spinDir = Math.random() < 0.5 ? -1 : 1;
+    this.spinTime = this.spinDuration = duration;
+    this.drifting = false;
+    this.boost = 0;
+    this.coins = Math.max(0, this.coins - 2);
+    return true;
+  }
+
+  giveBoost(seconds = 1.2) {
+    this.boost = Math.max(this.boost, seconds);
+  }
+
+  giveShield(seconds = 6) {
+    this.shield = Math.max(this.shield, seconds);
+  }
+
+  addCoin() {
+    this.coins = Math.min(MAX_COINS, this.coins + 1);
+  }
+
+  /** Start the item roulette that ends with `type` in hand. False if already holding something. */
+  rollItem(type) {
+    if (this.held) return false;
+    this.held = { type, charges: type === 'laser' ? LASER_SHOTS : 1 };
+    this.rolling = ITEM_ROLL_SECONDS;
+    return true;
+  }
+
+  /** Item ready to use (held and done rolling)? */
+  get itemReady() {
+    return this.held != null && this.rolling <= 0;
+  }
+
+  /** Use one charge of the held item; returns its type, or null. */
+  takeItem() {
+    if (!this.itemReady || this.state !== 'driving') return null;
+    const type = this.held.type;
+    if (--this.held.charges <= 0) this.held = null;
+    return type;
   }
 
   get position() {
@@ -100,15 +176,22 @@ export class Kart {
     this.rescuer.update(dt, this.model, this.hue); // flying off after a rescue
 
     const path = this.path;
-    const throttle = controlsEnabled ? input.throttle : 0;
-    const steerIn = controlsEnabled ? input.steer : 0;
-    const driftIn = controlsEnabled && input.drift;
+    if (this.shield > 0) this.shield -= dt;
+    if (this.rolling > 0) this.rolling -= dt;
+    const spinning = this.spinTime > 0;
+    if (spinning) this.spinTime -= dt;
+    const control = controlsEnabled && !spinning;
+    const throttle = control ? input.throttle : 0;
+    const steerIn = control ? input.steer : 0;
+    const driftIn = control && input.drift;
 
     // --- longitudinal
     const boosting = this.boost > 0;
     if (boosting) this.boost -= dt;
-    const maxSpeed = MAX_SPEED * this.topSpeedScale * (boosting ? 1.35 : 1);
-    const accel = ACCEL * this.topSpeedScale * (boosting ? 1.8 : 1);
+    const mud = this.inMud && this.shield <= 0 && !boosting;
+    const speedScale = this.topSpeedScale * (1 + this.coins * COIN_BONUS) * (mud ? MUD_SPEED : 1);
+    const maxSpeed = MAX_SPEED * speedScale * (boosting ? 1.35 : 1);
+    const accel = ACCEL * speedScale * (boosting ? 1.8 : 1);
 
     if (throttle > 0) {
       this.speed += throttle * accel * dt;
@@ -119,7 +202,8 @@ export class Kart {
     // drag (quadratic-ish feel: stronger near the top)
     const dragCoef = DRAG * (this.drifting ? 1.25 : 1);
     this.speed -= this.speed * dragCoef * dt;
-    if (this.speed > maxSpeed) this.speed = THREE.MathUtils.lerp(this.speed, maxSpeed, Math.min(1, dt * 3));
+    if (this.speed > maxSpeed) this.speed = THREE.MathUtils.lerp(this.speed, maxSpeed, Math.min(1, dt * (mud ? 5 : 3)));
+    if (spinning) this.speed -= this.speed * Math.min(1, dt * 2.5); // spin to a stop
     if (Math.abs(this.speed) < 0.02 && throttle === 0) this.speed = 0;
 
     // --- steering
@@ -146,6 +230,14 @@ export class Kart {
 
     const targetHeading = this.steer * maxAngle * Math.sign(this.speed || 1);
     this.heading += (targetHeading - this.heading) * Math.min(1, dt * 7);
+
+    // spin-out: two turns that wind down (ending facing forward again)
+    if (spinning) {
+      const u = 1 - Math.max(0, this.spinTime) / this.spinDuration;
+      this.spinYaw = this.spinDir * Math.PI * 4 * (1 - (1 - u) ** 2);
+    } else {
+      this.spinYaw = 0;
+    }
 
     // --- motion in track space
     const forward = this.speed * Math.cos(this.heading);
@@ -191,6 +283,7 @@ export class Kart {
       boost: this.boostLevel,
       hue: this.hue,
     });
+    this.gear.update(dt, { shield: this.shield, laser: this.held?.type === 'laser' && this.rolling <= 0, hue: this.hue });
     this.model.visible = this.respawnFlash <= 0 || Math.floor(this.respawnFlash * 12) % 2 === 0;
   }
 
@@ -199,8 +292,8 @@ export class Kart {
     const frame = this.path.frameAt(this.s, this.frame);
     const m = this.model;
     this.path.pointAt(this.s, this.lateral, 0, m.position, frame);
-    // yaw by heading (+ a bit of drift exaggeration)
-    this.#roadQuaternion(frame, -(this.heading + (this.drifting ? this.driftDir * 0.25 : 0)), m.quaternion);
+    // yaw by heading (+ a bit of drift exaggeration, + any spin-out)
+    this.#roadQuaternion(frame, -(this.heading + (this.drifting ? this.driftDir * 0.25 : 0)) + this.spinYaw, m.quaternion);
   }
 
   /** Orientation of a kart sitting on the road at `frame`, turned by `yaw`. */
@@ -224,6 +317,9 @@ export class Kart {
       .addScaledVector(frame.normal, -2);
     this.drifting = false;
     this.boost = 0;
+    this.spinTime = 0;
+    this.spinYaw = 0;
+    this.coins = Math.floor(this.coins / 2); // falling off costs half your coins
   }
 
   #updateFalling(dt) {

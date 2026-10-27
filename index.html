@@ -39,8 +39,9 @@
             <li><kbd>W</kbd>/<kbd>↑</kbd> accelerate · <kbd>S</kbd>/<kbd>↓</kbd> brake &amp; reverse</li>
             <li><kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd> steer</li>
             <li><kbd>Shift</kbd> or <kbd>Space</kbd> drift — release for a mini‑turbo</li>
+            <li><kbd>E</kbd> use your item (from <b>?</b> boxes: boost, shield, laser, cone, mud)</li>
             <li><kbd>R</kbd> reset to track · <kbd>C</kbd> camera · <kbd>Esc</kbd> pause</li>
-            <li>Gamepad: left stick steer, <kbd>RT</kbd> gas, <kbd>LT</kbd> brake, <kbd>A</kbd> drift</li>
+            <li>Gamepad: left stick steer, <kbd>RT</kbd> gas, <kbd>LT</kbd> brake, <kbd>A</kbd> drift, <kbd>LB</kbd>/<kbd>RB</kbd> item</li>
           </ul>
         </details>
 
@@ -73,6 +74,14 @@
       <div class="hud-left">
         <div class="speedo"><span id="speed">0</span><small>km/h</small></div>
         <div id="boost-bar" class="boost-bar"><i></i></div>
+      </div>
+      <div class="hud-item">
+        <div id="item-slot" class="item-slot empty" title="Held item — E / LB to use">
+          <span id="item-icon"></span>
+          <small id="item-charges"></small>
+          <kbd>E</kbd>
+        </div>
+        <div class="coins"><i></i><b id="coins">0</b></div>
       </div>
       <div class="hud-top">
         <div class="place"><span>Pos</span> <b id="place">1st</b><em>/<span id="racers">3</span></em></div>
@@ -176,6 +185,15 @@
       <canvas id="ed-map" class="ed-map" aria-label="Track map"></canvas>
       <p class="ed-hint">Drag a point · double‑click to add one · right‑click or <kbd>⌫</kbd> to remove · wheel zooms · drag empty space to pan · <kbd>F</kbd> fits</p>
 
+      <div class="ed-items">
+        <div id="ed-tools" class="ed-tools" role="toolbar" aria-label="Place items"></div>
+        <p id="ed-tool-hint" class="ed-hint"></p>
+        <div class="ed-item-actions">
+          <button id="ed-auto-items" class="btn btn-ghost tiny" type="button" title="Replace the items with a generated set">Auto items</button>
+          <button id="ed-clear-items" class="btn btn-ghost tiny" type="button">Clear items</button>
+        </div>
+      </div>
+
       <canvas id="ed-elev" class="ed-elev" aria-label="Elevation profile"></canvas>
       <p class="ed-hint">Elevation along the track — drag a point up or down</p>
 
@@ -189,6 +207,14 @@
         <label>Banking <output data-ed-out="bank"></output>
           <input id="ed-bank" type="range" min="0" max="2" step="0.1" />
         </label>
+      </div>
+
+      <div id="ed-point-bank" class="ed-point-bank">
+        <label class="check"><input id="ed-pb-on" type="checkbox" /> Bank at point <b id="ed-pb-index">—</b> by hand</label>
+        <label>Angle <output data-ed-out="pb"></output>
+          <input id="ed-pb" type="range" min="-45" max="45" step="1" />
+        </label>
+        <p class="ed-hint">Off = automatic (leans into the bend). Set a run of points to bank a whole section; the road eases between points.</p>
       </div>
 
       <div class="ed-actions">

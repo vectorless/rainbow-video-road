@@ -4,7 +4,7 @@
  *   throttle  -1..1  (gas / brake-reverse)
  *   steer     -1..1  (left / right)
  *   drift     bool
- *   actions   { pause, reset, camera, confirm }  — true for exactly one poll after pressing
+ *   actions   { pause, reset, camera, confirm, item }  — true for exactly one poll after pressing
  */
 export class Input {
   constructor(target = window) {
@@ -12,7 +12,7 @@ export class Input {
     this.throttle = 0;
     this.steer = 0;
     this.drift = false;
-    this.actions = { pause: false, reset: false, camera: false, confirm: false };
+    this.actions = { pause: false, reset: false, camera: false, confirm: false, item: false };
     this.anyInputAt = 0;
 
     this._pendingActions = new Set();
@@ -38,6 +38,9 @@ export class Input {
           break;
         case 'Enter':
           this._pendingActions.add('confirm');
+          break;
+        case 'KeyE':
+          this._pendingActions.add('item');
           break;
         default:
           break;
@@ -89,6 +92,8 @@ export class Input {
       this._edge(pad.index, 3, pad.buttons[3], 'reset');
       this._edge(pad.index, 2, pad.buttons[2], 'camera');
       this._edge(pad.index, 0, pad.buttons[0], 'confirm');
+      this._edge(pad.index, 4, pad.buttons[4], 'item');
+      this._edge(pad.index, 5, pad.buttons[5], 'item');
       if (Math.abs(lx) > 0 || Math.abs(padThrottle) > 0) this.anyInputAt = performance.now();
     }
 

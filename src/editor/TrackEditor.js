@@ -1,5 +1,15 @@
 import * as THREE from 'three';
-import { MIN_POINTS, MAX_POINTS, validateTrackData } from '../track/TrackPath.js';
+import { MIN_POINTS, MAX_POINTS, MAX_POINT_BANK, validateTrackData } from '../track/TrackPath.js';
+import {
+  ITEM_TYPES,
+  MAX_ITEMS,
+  itemTrackPos,
+  itemAnchor,
+  remapItemsForInsert,
+  remapItemsForDelete,
+  remapItemsForRotate,
+  generateItems,
+} from '../track/trackItems.js';
 import {
   listSavedTracks,
   saveTrack,
@@ -10,6 +20,7 @@ import {
 } from '../track/trackStore.js';
 
 const POINT_HIT_PX = 10;
+const ITEM_HIT_PX = 8;
 const MAX_HISTORY = 100;
 const MIN_TURN_RADIUS_FACTOR = 1.15; // × half width: below this the inner edge folds over itself
 const MAX_SLOPE = 0.7; // rise/run (~35°)
@@ -18,8 +29,11 @@ const MIN_CROSSING_CLEARANCE = 10; // world units between two roads that cross
 /**
  * Top-down track editor: a map canvas for X/Z, an elevation strip for Y, with the
  * real 3D track rebuilding live behind it. Owns the editing state (control points,
- * width, banking, name), undo/redo, validation warnings, the 3D control-point markers
- * and the overview camera used while editing.
+ * width, banking — overall and per point — name, items), undo/redo, validation
+ * warnings, the 3D control-point markers and the overview camera used while editing.
+ *
+ * Items (pickups and obstacles) are placed with the tool row under the map: pick a
+ * tool, click the road. Items can be dragged or right-clicked away with any tool.
  *
  * It talks to the game through `hooks`:
  *   applyTrack(data) → TrackPath   rebuild the world from track JSON, return the new path
@@ -40,6 +54,9 @@ export class TrackEditor {
     this.path = null; // TrackPath built from `state`
     this.selected = -1;
     this.hover = -1;
+    this.tool = 'select'; // 'select' or an item type to place
+    this.selectedItem = -1;
+    this.hoverItem = -1;
     this.history = [];
     this.future = [];
     this.dirty = false;
@@ -67,6 +84,8 @@ export class TrackEditor {
     this.savedId = savedId;
     this.selected = -1;
     this.hover = -1;
+    this.selectedItem = -1;
+    this.hoverItem = -1;
     this.history = [];
     this.future = [];
     this.dirty = false;
@@ -148,6 +167,7 @@ export class TrackEditor {
 
   #afterStateChange() {
     this.selected = Math.min(this.selected, this.state.points.length - 1);
+    this.selectedItem = Math.min(this.selectedItem, this.state.items.length - 1);
     this.dirty = true;
     this.#syncControls();
     this.#syncUndoButtons();
@@ -177,6 +197,7 @@ export class TrackEditor {
     const a = pts[seg];
     const b = pts[(seg + 1) % pts.length];
     const y = this.path.positions[sample * 3 + 1] ?? (a[1] + b[1]) / 2;
+    remapItemsForInsert(this.state.items, this.path, seg, (sample / this.path.sampleCount) * this.path.length);
     pts.splice(seg + 1, 0, [round1(x), round1(y), round1(z)]);
     this.selected = seg + 1;
     this.dirty = true;
@@ -189,6 +210,7 @@ export class TrackEditor {
       return;
     }
     this.#snapshot();
+    remapItemsForDelete(this.state.items, this.path, i);
     this.state.points.splice(i, 1);
     if (this.selected >= this.state.points.length) this.selected = this.state.points.length - 1;
     this.hover = -1;
@@ -203,10 +225,121 @@ export class TrackEditor {
     if (this.selected === 0) return;
     this.#snapshot();
     const pts = this.state.points;
+    remapItemsForRotate(this.state.items, pts.length, this.selected);
     this.state.points = pts.slice(this.selected).concat(pts.slice(0, this.selected));
     this.selected = 0;
     this.dirty = true;
     this.#setStatus('Start/finish moved');
+  }
+
+  /* ------------------------------- items ------------------------------- */
+
+  /** Track-space position under a map pixel, or null when it isn't on the road. */
+  #roadAt(px, py) {
+    const path = this.path;
+    const [x, z] = this.#mapToWorld(px, py);
+    const i = path.closestSample(x, z);
+    const dx = x - path.positions[i * 3];
+    const dz = z - path.positions[i * 3 + 2];
+    const rx = path.rights[i * 3];
+    const rz = path.rights[i * 3 + 2];
+    // the road's right vector tilts with banking; undo that to get distance across the road
+    const lateral = (dx * rx + dz * rz) / Math.max(1e-6, rx * rx + rz * rz);
+    if (Math.abs(lateral) > path.halfWidth) return null;
+    return { s: (i / path.sampleCount) * path.length, lateral };
+  }
+
+  #setTool(tool) {
+    this.tool = tool;
+    for (const b of this.el.tools.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.tool === tool));
+    this.el.toolHint.textContent =
+      tool === 'select'
+        ? 'Pick an item, then click the road to place it. Drag items to move them; right‑click or ⌫ removes one.'
+        : `Click the road to place a ${ITEM_TYPES[tool].label.toLowerCase()} · right‑click removes · “Select” to stop placing`;
+    this.el.map.style.cursor = tool === 'select' ? '' : 'copy';
+  }
+
+  #placeItem(px, py) {
+    if (this.state.items.length >= MAX_ITEMS) {
+      this.#setStatus(`Maximum of ${MAX_ITEMS} items reached`, true);
+      return;
+    }
+    const at = this.#roadAt(px, py);
+    if (!at) {
+      this.#setStatus('Click on the road to place an item', true);
+      return;
+    }
+    this.#snapshot();
+    // keep it fully on the road
+    const def = ITEM_TYPES[this.tool];
+    const room = Math.max(0, this.path.halfWidth - def.hitL);
+    const lateral = Math.max(-room, Math.min(room, at.lateral));
+    this.state.items.push({ type: this.tool, ...itemAnchor(this.path, at.s, lateral) });
+    this.selectedItem = this.state.items.length - 1;
+    this.selected = -1;
+    this.dirty = true;
+    this.#setStatus(`Placed ${def.label.toLowerCase()}`);
+  }
+
+  #moveItem(i, px, py) {
+    const at = this.#roadAt(px, py);
+    if (!at) return;
+    const item = this.state.items[i];
+    const room = Math.max(0, this.path.halfWidth - ITEM_TYPES[item.type].hitL);
+    Object.assign(item, itemAnchor(this.path, at.s, Math.max(-room, Math.min(room, at.lateral))));
+    this.dirty = true;
+  }
+
+  #deleteItem(i) {
+    this.#snapshot();
+    const [item] = this.state.items.splice(i, 1);
+    this.selectedItem = -1;
+    this.hoverItem = -1;
+    this.dirty = true;
+    this.#setStatus(`Removed ${ITEM_TYPES[item.type].label.toLowerCase()}`);
+  }
+
+  #hitItem(px, py) {
+    let best = -1;
+    let bestD = ITEM_HIT_PX * ITEM_HIT_PX;
+    this.state.items.forEach((item, i) => {
+      const [mx, my] = this.#itemOnMap(item);
+      const d = (mx - px) ** 2 + (my - py) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  #itemOnMap(item) {
+    const { s, lateral } = itemTrackPos(this.path, item);
+    this.path.pointAt(s, lateral, 0, _tmp);
+    return this.#worldToMap(_tmp.x, _tmp.z);
+  }
+
+  /* ---------------------------- point banking ---------------------------- */
+
+  #setPointBank(i, deg) {
+    const p = this.state.points[i];
+    if (deg == null) p.length = 3;
+    else p[3] = Math.round(Math.max(-MAX_POINT_BANK, Math.min(MAX_POINT_BANK, deg)));
+    this.dirty = true;
+  }
+
+  #syncPointBank() {
+    const i = this.selected;
+    const p = i >= 0 ? this.state.points[i] : null;
+    const box = this.el.pointBank;
+    box.classList.toggle('disabled', !p);
+    this.el.pbOn.disabled = !p;
+    this.el.pbIndex.textContent = p ? String(i) : '—';
+    const manual = p && p.length > 3;
+    this.el.pbOn.checked = Boolean(manual);
+    this.el.pb.disabled = !manual;
+    if (manual) this.el.pb.value = p[3];
+    this.el.pbOut.textContent = manual ? bankLabel(p[3]) : 'auto';
   }
 
   #replaceTrack(data, { keepHistory = true, savedId = null } = {}) {
@@ -214,6 +347,7 @@ export class TrackEditor {
     this.state = validateTrackData(data);
     this.savedId = savedId;
     this.selected = -1;
+    this.selectedItem = -1;
     this.dirty = true;
     this.#syncControls();
     this.#rebuild();
@@ -330,6 +464,8 @@ export class TrackEditor {
       `${Math.round((p.maxY - p.minY) * 10) / 10} m of climb`,
     ];
     if (bridges) parts.push(`${bridges} bridge${bridges === 1 ? '' : 's'}`);
+    const items = this.state.items.length;
+    parts.push(`${items} item${items === 1 ? '' : 's'}`);
     this.el.stats.textContent = parts.join(' · ');
   }
 
@@ -353,6 +489,13 @@ export class TrackEditor {
       undo: q('#ed-undo'),
       redo: q('#ed-redo'),
       load: q('#ed-load'),
+      tools: q('#ed-tools'),
+      toolHint: q('#ed-tool-hint'),
+      pointBank: q('#ed-point-bank'),
+      pbOn: q('#ed-pb-on'),
+      pb: q('#ed-pb'),
+      pbOut: q('[data-ed-out="pb"]'),
+      pbIndex: q('#ed-pb-index'),
     };
     this.mapCtx = this.el.map.getContext('2d');
     this.elevCtx = this.el.elev.getContext('2d');
@@ -376,6 +519,51 @@ export class TrackEditor {
       this.dirty = true;
     });
     this.el.bank.addEventListener('pointerdown', () => this.#snapshot());
+
+    // item tools
+    const tools = [['select', 'Select', null], ...Object.entries(ITEM_TYPES).map(([type, d]) => [type, d.label, d])];
+    for (const [tool, label, def] of tools) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `ed-tool${def?.kind === 'obstacle' ? ' obstacle' : ''}`;
+      b.dataset.tool = tool;
+      b.innerHTML = def ? `<i style="--c:${def.color}"></i>${label}` : label;
+      b.addEventListener('click', () => this.#setTool(tool));
+      this.el.tools.appendChild(b);
+    }
+    this.#setTool('select');
+    q('#ed-auto-items').addEventListener('click', () => {
+      this.#snapshot();
+      this.state.items = generateItems(this.path, (Math.random() * 1e9) >>> 0);
+      this.selectedItem = -1;
+      this.dirty = true;
+      this.#setStatus(`Placed ${this.state.items.length} items — undo to get yours back`);
+    });
+    q('#ed-clear-items').addEventListener('click', () => {
+      if (!this.state.items.length) return;
+      this.#snapshot();
+      this.state.items = [];
+      this.selectedItem = -1;
+      this.dirty = true;
+      this.#setStatus('Items cleared');
+    });
+
+    // banking at the selected point
+    this.el.pbOn.addEventListener('change', () => {
+      if (this.selected < 0) return;
+      this.#snapshot();
+      // start a hand-set point at the automatic bank it had, so turning it on changes nothing yet
+      const auto = THREE.MathUtils.radToDeg(this.path.frameAt(this.path.pointArcLengths[this.selected]).bank);
+      this.#setPointBank(this.selected, this.el.pbOn.checked ? auto : null);
+      this.#syncPointBank();
+    });
+    this.el.pb.addEventListener('pointerdown', () => this.#snapshot());
+    this.el.pb.addEventListener('input', () => {
+      if (this.selected < 0) return;
+      this.#setPointBank(this.selected, Number(this.el.pb.value));
+      this.el.pbOut.textContent = bankLabel(Number(this.el.pb.value));
+      this.needsDraw = true;
+    });
 
     q('#ed-test').addEventListener('click', () => {
       if (this.dirty) this.#rebuild();
@@ -418,8 +606,9 @@ export class TrackEditor {
     this.el.map.addEventListener('dblclick', (e) => this.#mapDoubleClick(e));
     this.el.map.addEventListener('wheel', (e) => this.#mapWheel(e), { passive: false });
     this.el.map.addEventListener('pointerleave', () => {
-      if (this.hover !== -1) {
+      if (this.hover !== -1 || this.hoverItem !== -1) {
         this.hover = -1;
+        this.hoverItem = -1;
         this.needsDraw = true;
       }
     });
@@ -453,6 +642,9 @@ export class TrackEditor {
     } else if (mod && e.code === 'KeyY') {
       e.preventDefault();
       this.redo();
+    } else if ((e.code === 'Delete' || e.code === 'Backspace') && this.selectedItem >= 0) {
+      e.preventDefault();
+      this.#deleteItem(this.selectedItem);
     } else if ((e.code === 'Delete' || e.code === 'Backspace') && this.selected >= 0) {
       e.preventDefault();
       this.#deletePoint(this.selected);
@@ -621,16 +813,27 @@ export class TrackEditor {
   #mapPointerDown(e) {
     const [px, py] = this.#eventPos(e, this.el.map);
     const hit = this.#hitPoint(px, py);
+    const itemHit = hit < 0 ? this.#hitItem(px, py) : -1;
     this.el.map.setPointerCapture(e.pointerId);
     if (e.button === 2) {
       if (hit >= 0) this.#deletePoint(hit);
+      else if (itemHit >= 0) this.#deleteItem(itemHit);
       return;
     }
     if (hit >= 0) {
       this.selected = hit;
+      this.selectedItem = -1;
       this.#snapshot();
       this.drag = { type: 'point', index: hit, moved: false };
+    } else if (itemHit >= 0) {
+      this.selectedItem = itemHit;
+      this.selected = -1;
+      this.#snapshot();
+      this.drag = { type: 'item', index: itemHit, moved: false };
+    } else if (this.tool !== 'select' && this.#roadAt(px, py)) {
+      this.#placeItem(px, py);
     } else {
+      this.selectedItem = -1;
       this.drag = { type: 'pan', startX: px, startY: py, cx: this.view.cx, cz: this.view.cz };
     }
     this.needsDraw = true;
@@ -643,22 +846,28 @@ export class TrackEditor {
       this.#movePoint(this.drag.index, x, z);
       this.drag.moved = true;
       this.needsDraw = true;
+    } else if (this.drag?.type === 'item') {
+      this.#moveItem(this.drag.index, px, py);
+      this.drag.moved = true;
+      this.needsDraw = true;
     } else if (this.drag?.type === 'pan') {
       this.view.cx = this.drag.cx - (px - this.drag.startX) / this.view.scale;
       this.view.cz = this.drag.cz - (py - this.drag.startY) / this.view.scale;
       this.needsDraw = true;
     } else {
       const hit = this.#hitPoint(px, py);
-      if (hit !== this.hover) {
+      const itemHit = hit < 0 ? this.#hitItem(px, py) : -1;
+      if (hit !== this.hover || itemHit !== this.hoverItem) {
         this.hover = hit;
-        this.el.map.style.cursor = hit >= 0 ? 'grab' : 'crosshair';
+        this.hoverItem = itemHit;
         this.needsDraw = true;
       }
+      this.el.map.style.cursor = hit >= 0 || itemHit >= 0 ? 'grab' : this.tool !== 'select' ? 'copy' : 'crosshair';
     }
   }
 
   #mapPointerUp(e) {
-    if (this.drag?.type === 'point' && !this.drag.moved) {
+    if ((this.drag?.type === 'point' || this.drag?.type === 'item') && !this.drag.moved) {
       // a click without movement shouldn't leave an undo entry
       this.history.pop();
       this.#syncUndoButtons();
@@ -673,7 +882,8 @@ export class TrackEditor {
 
   #mapDoubleClick(e) {
     const [px, py] = this.#eventPos(e, this.el.map);
-    if (this.#hitPoint(px, py) >= 0) return;
+    if (this.tool !== 'select') return; // double-clicks while placing are just two placements
+    if (this.#hitPoint(px, py) >= 0 || this.#hitItem(px, py) >= 0) return;
     const [x, z] = this.#mapToWorld(px, py);
     this.#insertPoint(x, z);
   }
@@ -774,6 +984,8 @@ export class TrackEditor {
       drawArrow(ctx, mx, my, ang, Math.max(8, roadPx * 0.6));
     }
 
+    this.#drawItems(ctx);
+
     // control points
     pts.forEach(([x, , z], i) => {
       const [mx, my] = this.#worldToMap(x, z);
@@ -794,13 +1006,49 @@ export class TrackEditor {
         ctx.textAlign = 'center';
         ctx.fillText(String(i), mx, my - r - 4);
       }
+      // hand-set banking
+      if (pts[i].length > 3) {
+        ctx.fillStyle = '#2bd2ff';
+        ctx.font = '700 9px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${pts[i][3]}°`, mx, my + r + 11);
+      }
     });
+    this.#syncPointBank();
 
     // start flag at point 0
     {
       const [mx, my] = this.#worldToMap(pts[0][0], pts[0][2]);
       drawFlag(ctx, mx + 7, my - 7);
     }
+  }
+
+  #drawItems(ctx) {
+    const scale = this.view.scale;
+    this.state.items.forEach((item, i) => {
+      const def = ITEM_TYPES[item.type];
+      const [mx, my] = this.#itemOnMap(item);
+      const sel = i === this.selectedItem;
+      const hov = i === this.hoverItem;
+      ctx.fillStyle = def.color;
+      ctx.strokeStyle = sel ? '#2bd2ff' : hov ? '#ffffff' : 'rgba(10,7,24,0.9)';
+      ctx.lineWidth = sel ? 2.5 : 1;
+      ctx.beginPath();
+      if (item.type === 'mud') {
+        // to scale, along the road
+        const { s } = itemTrackPos(this.path, item);
+        const f = this.path.frameAt(s);
+        const ang = Math.atan2(f.tangent.z, f.tangent.x);
+        ctx.ellipse(mx, my, Math.max(4, def.hitS * scale), Math.max(3, def.hitL * scale), ang, 0, Math.PI * 2);
+      } else if (def.kind === 'obstacle') {
+        const r = Math.max(3, def.hitL * scale);
+        ctx.rect(mx - r, my - r, r * 2, r * 2);
+      } else {
+        ctx.arc(mx, my, Math.max(3, Math.min(6, def.hitL * scale)), 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.stroke();
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -1094,6 +1342,12 @@ const _tmp = new THREE.Vector3();
 const _tmp2 = new THREE.Vector3();
 
 const round1 = (v) => Math.round(v * 10) / 10;
+
+/** Point banking label: positive lifts the right edge, so the road leans left. */
+function bankLabel(deg) {
+  if (!deg) return '0° flat';
+  return `${Math.abs(deg)}° ${deg > 0 ? 'leans left' : 'leans right'}`;
+}
 
 function niceStep(raw) {
   const pow = 10 ** Math.floor(Math.log10(raw));

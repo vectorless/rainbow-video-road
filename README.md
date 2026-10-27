@@ -9,8 +9,13 @@ a live, pixelated, hue‑shifted segment of one of your videos — a rainbow you
   3D track rebuilds live; save, export, import and share tracks as links
 - Each slat tile streams a clip from your folder, pixelated and recoloured in a shader
 - Arcade driving: acceleration, drifting with mini‑turbos, banked corners
-- Two AI rivals (a princess and a gorilla, each in their own kart) with a starting grid,
+- Three AI rivals (a princess, a gorilla and a mushroom charioteer) with a starting grid,
   bumping and a race position in the HUD
+- Pickups: boost orbs, shields, coins (a little extra top speed each) and **?** item boxes
+  that give a held item — boost, shield, a 3‑shot **laser** that bolts onto your kart, or a
+  cone / mud patch to drop behind you
+- Obstacles: blocks (ricochet, spin, stop), cones (knocked flying off the road) and mud
+  (slows you down)
 - No barriers by default: drive off the edge and a **space god** swoops down, beams you up
   and puts you back on the road (guard rails are still an option in Settings)
 - Chase / far / hood cameras, lap timing, bloom, gamepad support
@@ -35,6 +40,7 @@ Build a static version with `npm run build` (output in `dist/`, serves from any 
 | Accelerate / brake‑reverse | `W` `S` or `↑` `↓` | RT / LT |
 | Steer | `A` `D` or `←` `→` | Left stick |
 | Drift (release for a mini‑turbo) | `Shift` or `Space` | A |
+| Use held item | `E` | LB / RB |
 | Reset to the road | `R` | Y |
 | Change camera | `C` | X |
 | Pause | `Esc` or `P` | Start |
@@ -48,7 +54,12 @@ and its elevation profile; the 3D view behind it rebuilds as you edit.
   segment · **right‑click** (or `⌫`) to remove one · wheel zooms, drag empty space to pan,
   `F` fits the view
 - Drag a point **up or down in the elevation strip** to change its height
-- **Road width** and **Banking** sliders apply to the whole track
+- **Road width** and **Banking** sliders apply to the whole track; select a point and tick
+  **Bank at point … by hand** to set its banking angle yourself (the road eases between
+  points, so a run of hand-set points makes a banked section)
+- **Items**: pick a tool under the map (item box, boost, shield, coin, block, cone, mud) and
+  click the road to place it; drag items to move them, right‑click or `⌫` to remove.
+  **Auto items** scatters a generated set, **Clear items** removes them all
 - **Set start here** makes the selected point the start/finish line
 - Warnings flag corners too tight for the road width, very steep slopes, and places where
   the track crosses itself without enough vertical clearance (crossings with room are
@@ -69,8 +80,17 @@ input the player's controls do, so they obey the same physics. They aim for a ra
 on the inside of the bends, go round karts ahead of them, and rubber‑band a little toward
 the player. **Rival racers** and **Rival pace** are in Settings.
 
-Any kart that falls off is rescued by its space god (`src/kart/SpaceGod.js`), which carries
-it back to the last spot it was safely on the road. `R` still puts you back at once.
+Any kart that falls off is rescued by its space god (`src/kart/SpaceGod.js`, a Cthulhu model
+with a rainbow halo), which carries it back to the last spot it was safely on the road. `R`
+still puts you back at once.
+
+## Pickups and obstacles
+
+`src/items/ItemSystem.js` builds the track's items, checks every kart against them in track
+space each frame and applies the effects; `src/kart/Kart.js` holds the per‑kart state
+(shield, spin‑out, coins, mud, held item). Rivals steer round obstacles, aim for pickups and
+use their items too. Generated tracks get a seeded set of items (`generateItems` in
+`src/track/trackItems.js`).
 
 ### Adding a rival model
 
@@ -95,12 +115,16 @@ faces −X (as Meshy exports do); pass a different `yaw` if it doesn't.
   "width": 14,
   "bankStrength": 1,
   "seed": 1337,
-  "points": [[x, y, z], [x, y, z], ...]
+  "points": [[x, y, z], [x, y, z, bank], ...],
+  "items": [{ "type": "block", "seg": 3, "u": 0.42, "x": -0.3 }, ...]
 }
 ```
 
 `points` are the control points of a closed centripetal Catmull‑Rom spline (4–64 of them;
-the first one is the start line). `width` is the road width in world units; `bankStrength`
+the first one is the start line). An optional 4th number is banking set by hand at that
+point, in degrees (positive lifts the right edge). Each item sits on segment `seg` (point
+`seg` → `seg+1`), a fraction `u` along it and `x` across the road (−1..1 of the half width);
+`type` is one of `itembox`, `boost`, `shield`, `coin`, `block`, `cone`, `mud`. `width` is the road width in world units; `bankStrength`
 scales the automatic banking (0 = flat). Share links hold the same JSON, deflated and
 base64url‑encoded in the URL hash.
 
@@ -156,6 +180,10 @@ src/kart/FigureKartModel.js  wraps an imported model as a kart
 src/kart/AIDriver.js       steering/throttle for computer racers
 src/kart/Rivals.js         rival roster, starting grid, bumping, race positions
 src/kart/SpaceGod.js       the rescuer that carries fallen karts back to the road
+src/kart/KartGear.js       shield bubble + laser cannons that attach to any kart
+src/track/trackItems.js    item types, placement format, editor remapping, generated items
+src/items/ItemSystem.js    item runtime: collisions, effects, respawns, flying cones, lasers
+src/items/itemMeshes.js    item meshes
 src/kart/Input.js          keyboard + gamepad
 public/models/             optimised rival models (GLB)
 src/camera/ChaseCamera.js  chase / far / hood cameras and the menu fly‑over

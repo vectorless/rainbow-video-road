@@ -14,7 +14,12 @@ export class Hud {
       boost: root.querySelector('#boost-bar i'),
       video: root.querySelector('#video-status'),
       toast: root.querySelector('#toast'),
+      itemSlot: root.querySelector('#item-slot'),
+      itemIcon: root.querySelector('#item-icon'),
+      itemCharges: root.querySelector('#item-charges'),
+      coins: root.querySelector('#coins'),
     };
+    this._lastCoins = 0;
     this.countdownEl = document.getElementById('countdown');
     this._toastTimer = 0;
     this._lastSpeed = -1;
@@ -28,7 +33,7 @@ export class Hud {
     this.root.classList.add('hidden');
   }
 
-  update({ speed, lap, lapsTotal, time, best, boost, finished, place = 1, racers = 1 }) {
+  update({ speed, lap, lapsTotal, time, best, boost, finished, place = 1, racers = 1, item = null, coins = 0 }) {
     const kmh = Math.round(Math.abs(speed) * 3.1);
     if (kmh !== this._lastSpeed) {
       this.el.speed.textContent = String(kmh);
@@ -42,6 +47,27 @@ export class Hud {
     this.el.placeBox.hidden = racers < 2;
     this.el.place.textContent = ordinal(place);
     this.el.racers.textContent = String(racers);
+    this.#updateItem(item);
+    if (coins !== this._lastCoins) {
+      this.el.coins.textContent = String(coins);
+      const box = this.el.coins.parentElement;
+      box.classList.remove('bump');
+      void box.offsetWidth; // restart the animation
+      if (coins > this._lastCoins) box.classList.add('bump');
+      this._lastCoins = coins;
+    }
+  }
+
+  /** Held item slot; while the roulette runs, flick through the icons. */
+  #updateItem(item) {
+    const slot = this.el.itemSlot;
+    slot.classList.toggle('empty', !item);
+    slot.classList.toggle('rolling', Boolean(item?.rolling));
+    let icon = '';
+    if (item) icon = item.rolling ? ROLL_ICONS[Math.floor(performance.now() / 70) % ROLL_ICONS.length] : ITEM_ICONS[item.type] || '?';
+    if (this.el.itemIcon.textContent !== icon) this.el.itemIcon.textContent = icon;
+    const charges = item && !item.rolling && item.charges > 1 ? `×${item.charges}` : '';
+    if (this.el.itemCharges.textContent !== charges) this.el.itemCharges.textContent = charges;
   }
 
   setVideoStatus(text) {
@@ -87,6 +113,9 @@ export class Hud {
     this.countdownEl.classList.add('hidden');
   }
 }
+
+const ITEM_ICONS = { boost: '⚡', shield: '🛡️', laser: '🔫', cone: '🚧', mud: '🟤' };
+const ROLL_ICONS = Object.values(ITEM_ICONS);
 
 /** 1 → "1st", 2 → "2nd", 11 → "11th" … */
 export function ordinal(n) {

@@ -7,6 +7,7 @@ import { AIDriver } from './AIDriver.js';
 const ROSTER = [
   { name: 'Princess', file: 'models/blonde.glb', lineOffset: -1.2, talent: 1.02 },
   { name: 'Gorilla', file: 'models/gorilla.glb', lineOffset: 1.4, talent: 0.98 },
+  { name: 'Mushroom', file: 'models/mushroom.glb', lineOffset: 0.2, talent: 1.0 },
 ];
 
 const KART_LENGTH = 3.0; // bump box, along the track
@@ -27,6 +28,8 @@ export class Rivals {
     this.rails = true;
     this.pace = 1;
     this.visible = false;
+    /** @type {import('../items/ItemSystem.js').ItemSystem | null} */
+    this.items = null;
     this.ready = this.#load();
   }
 
@@ -114,8 +117,9 @@ export class Rivals {
     const L = this.path.length;
 
     for (const r of racers) {
-      r.driver.update(dt, karts, r.progress - race.progress);
+      r.driver.update(dt, karts, r.progress - race.progress, this.items);
       r.kart.update(dt, r.driver.input, controlsEnabled);
+      if (controlsEnabled && r.driver.input.useItem) this.items?.useItem(r.kart, karts);
 
       let delta = r.kart.s - r.prevS;
       if (delta > L / 2) delta -= L;

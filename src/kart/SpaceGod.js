@@ -1,7 +1,25 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { tameMaterials } from './FigureKartModel.js';
+
+const MODEL_FILE = 'models/cthulhu.glb'; // faces +Z, standing on its feet
+const MODEL_HEIGHT = 7;
+
+// One load shared by every god; until it arrives (or if it fails) gods use the primitive figure.
+let modelPromise = null;
+function loadModel() {
+  modelPromise ||= new GLTFLoader()
+    .loadAsync(import.meta.env.BASE_URL + MODEL_FILE)
+    .then((gltf) => tameMaterials(gltf.scene))
+    .catch((err) => {
+      console.warn(`[space god] couldn't load ${MODEL_FILE}, using the built-in figure`, err);
+      return null;
+    });
+  return modelPromise;
+}
 
 const HOVER = 6.5; // how far above the kart the god floats while carrying it
-const HANG = 3.2; // kart hangs this far below the god's hands
+const HANG = 3.2; // kart hangs this far below the god's hands (stand-in figure)
 
 // Rescue timeline (seconds from the start of the rescue)
 const ARRIVE = 0.55; // swoop down to the fallen kart
@@ -16,9 +34,9 @@ const clamp01 = (t) => Math.min(1, Math.max(0, t));
 
 /**
  * A cosmic figure that swoops in when a kart falls off the road, beams it up,
- * carries it back to the last safe spot and puts it down. Built from primitives
- * (emissive, so bloom makes it glow); no lights, so showing and hiding it never
- * changes the scene's light count.
+ * carries it back to the last safe spot and puts it down. Uses the imported model
+ * (Cthulhu) once it has loaded, with a primitive stand-in before that. No lights,
+ * so showing and hiding it never changes the scene's light count.
  *
  * Driven by its kart: `begin()` when the kart has fallen, then `update()` every
  * frame, which also moves the kart's model and tells the kart when to let go.
@@ -30,10 +48,15 @@ export class SpaceGod extends THREE.Group {
     this.active = false; // anything on screen (rescuing or departing)
     this.phase = 'idle'; // 'idle' | 'rescue' | 'depart'
     this.t = 0;
+    this.hang = HANG;
 
     const figure = new THREE.Group();
     this.figure = figure;
     this.add(figure);
+    // the primitive stand-in body (hidden once the model is in)
+    const body = new THREE.Group();
+    this.standIn = body;
+    figure.add(body);
 
     this.materials = [];
     const mat = (params, Ctor = THREE.MeshStandardMaterial) => {
@@ -48,7 +71,7 @@ export class SpaceGod extends THREE.Group {
     const robe = new THREE.Mesh(new THREE.ConeGeometry(1.5, 4.2, 20, 1, true), robeMat);
     robe.position.y = 1.0;
     robe.rotation.x = Math.PI; // wide end down
-    figure.add(robe);
+    body.add(robe);
 
     // head
     const head = new THREE.Mesh(
@@ -56,13 +79,13 @@ export class SpaceGod extends THREE.Group {
       mat({ color: 0xfff2d0, emissive: 0xffd27a, emissiveIntensity: 1.6, roughness: 0.3 }),
     );
     head.position.y = 3.7;
-    figure.add(head);
+    body.add(head);
     const eyeMat = mat({ color: 0xffffff, emissive: 0x7ff6ff, emissiveIntensity: 4 }, THREE.MeshStandardMaterial);
     for (const side of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), eyeMat);
       // eyes look forward and down, at whoever is in the beam
       eye.position.set(side * 0.34, 3.55, -0.82);
-      figure.add(eye);
+      body.add(eye);
     }
 
     // halo
@@ -87,7 +110,7 @@ export class SpaceGod extends THREE.Group {
       const hand = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 10), handMat);
       hand.position.y = -2.7;
       shoulder.add(hand);
-      figure.add(shoulder);
+      body.add(shoulder);
       this.arms.push({ shoulder, side });
     }
 
@@ -114,6 +137,32 @@ export class SpaceGod extends THREE.Group {
     this._v = new THREE.Vector3();
     this._q = new THREE.Quaternion();
     this.fade = 0;
+
+    loadModel().then((src) => src && this.#useModel(src));
+  }
+
+  /** Swap the stand-in for the imported model: scaled, turned to face -Z, hands at the origin. */
+  #useModel(src) {
+    const model = src.clone(true);
+    model.rotation.y = Math.PI;
+    const holder = new THREE.Group();
+    holder.add(model);
+    const box = new THREE.Box3().setFromObject(holder);
+    const scale = MODEL_HEIGHT / box.getSize(new THREE.Vector3()).y;
+    holder.scale.setScalar(scale);
+    // its claws hang at about 45% of its height; put them at the origin, where the beam starts
+    holder.position.y = -box.min.y * scale - MODEL_HEIGHT * 0.45;
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = o.material.clone(); // each god fades on its own
+      o.material.transparent = true;
+      o.material.userData.baseOpacity = 1;
+      this.materials.push(o.material);
+    });
+    this.figure.add(holder);
+    this.standIn.visible = false;
+    this.halo.position.y = MODEL_HEIGHT * 0.55 + 0.6; // just over its head
+    this.hang = 4.2; // clutched below its claws, clear of the tentacles
   }
 
   /**
@@ -192,7 +241,7 @@ export class SpaceGod extends THREE.Group {
       } else if (tLower < 0) {
         // carry: arc over to above the drop point
         const u = smooth(clamp01(tCarry / CARRY));
-        const above = this._v.copy(this.dropoff).addScaledVector(this.dropUp, HOVER + HANG);
+        const above = this._v.copy(this.dropoff).addScaledVector(this.dropUp, HOVER + this.hang);
         this.position.lerpVectors(this.pickup, above, u);
         this.position.y += Math.sin(u * Math.PI) * 6;
         this.#hangPoint(this.position, this.dropUp, kartModel.position);
@@ -204,7 +253,7 @@ export class SpaceGod extends THREE.Group {
       } else {
         // lower: the beam sets the kart down on the road
         const u = smooth(clamp01(tLower / LOWER));
-        this.position.copy(this.dropoff).addScaledVector(this.dropUp, HOVER + HANG);
+        this.position.copy(this.dropoff).addScaledVector(this.dropUp, HOVER + this.hang);
         const hang = this.#hangPoint(this.position, this.dropUp, this._v);
         kartModel.position.lerpVectors(hang, this.dropoff, u);
         kartModel.quaternion.copy(this.dropQuat);
@@ -249,7 +298,7 @@ export class SpaceGod extends THREE.Group {
 
   /** Where a carried kart hangs below a god at `godPos`. */
   #hangPoint(godPos, up, out) {
-    return out.copy(godPos).addScaledVector(up, -HANG);
+    return out.copy(godPos).addScaledVector(up, -this.hang);
   }
 
   /** Turn to face along the direction of travel (eyes are on -Z). */
