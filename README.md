@@ -14,8 +14,9 @@ left to steer, buttons on the right)
   3D track rebuilds live; save, export, import and share tracks as links
 - Each slat tile streams a clip from your folder, pixelated and recoloured in a shader
 - Arcade driving: acceleration, drifting with mini‑turbos, banked corners
-- Three AI rivals (a princess, a gorilla and a mushroom charioteer) with a starting grid,
-  bumping and a race position in the HUD
+- Three AI rivals with personalities — a tidy princess who blocks, a gorilla brawler, a
+  trigger-happy mushroom charioteer — who hold grudges (hit one and it comes after you), react
+  with emotes, ease off when far ahead and push back when you lead
 - Pickups: boost orbs, shields, coins (a little extra top speed each) and **?** item boxes
   that give a held item — boost, shield, a 3‑shot **laser** that bolts onto your kart, or a
   cone / mud patch to drop behind you

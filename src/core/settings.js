@@ -29,6 +29,7 @@ export const DEFAULTS = Object.freeze({
   rails: false, // off: fall off the edge and the space god carries you back
   rivals: true,
   rivalPace: 0.95, // rival top speed vs the player's
+  catchUp: true, // rivals ease off when far ahead and push when you lead (small, hidden pace changes)
   laps: 3,
   seed: 1337,
 

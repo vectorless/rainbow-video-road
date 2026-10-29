@@ -232,6 +232,47 @@ via `this._tmp…` to avoid allocations every frame.
    provide the rigged export; when it arrives, drive the arm/hand bones from `steer` in a
    model-specific `animate()`.
 
+## 5c. Rival behaviour: personalities, grudges, race director (2026-10-29)
+
+Asked for: rivals that interact with each other, ease off when far ahead so the player can
+catch up, and get more competitive when the player leads. Design informed by:
+- Pure's AI postmortem (Game Developer, "The Pure Advantage: Advanced Racing Game AI"): classic
+  rubber-banding was rejected as easy to spot; instead bounded 0..1 skill offsets steer each AI
+  toward a designer-set *target point* relative to the player, groups are spread by giving
+  racers different targets, and the adjustment fades over the last 20% so the finish is decided
+  by skill.
+- Game Wisdom, "Explaining Rubber-Banding AI": visible rubber-banding erodes trust; keep help
+  subtle, rule-based and switchable for experts.
+- GRID (2019) / GRID Legends "Nemesis" system: repeated contact makes a specific AI hold a
+  grudge and race that driver more aggressively; grudges cool off.
+- Richard Burns Rally dev diary: AI drivers with temperaments players learn to recognise.
+- Mario Kart: catch-up mainly through item odds by position, the same rule for everyone.
+
+Implementation:
+- **Personalities** (`ROSTER` in `Rivals.js`, traits 0..1): Princess clean (consistency 0.9) and
+  defends (blocks a kart tailing her, defend 0.8), targetGap +25; Gorilla brawler (aggression
+  0.85), targetGap 0; Mushroom trigger-happy (trigger 0.95), hangs back, targetGap −20.
+- **Race director** (`Rivals.#direct`): gap = progress − player progress − targetGap. Ahead by
+  30→250 ⇒ intensity 0→−1 (pace down to −9%); behind by 15→195 ⇒ 0→+1 (pace up to +6%). Intensity
+  follows smoothly (rate 0.4/s); nothing in the first 6 s; the fighting pace bonus fades to 35%
+  over the final 20% of the race; pace changes off when Settings → **Catch-up** is unticked
+  (behaviour changes stay).
+- **Intensity → behaviour** (`AIDriver`): fighting = more aggression, tidier line, later lift in
+  corners, targets the player; easing = sloppier, lifts earlier, holds items longer and won't
+  laser / drop hazards on a player who's behind.
+- **Grudges**: lasered by X ⇒ +0.6 heat on X; hit X's dropped cone/mud ⇒ +0.35; side-by-side
+  contact ⇒ +0.08 (capped at 0.6, 1.5 s cooldown per pair). Heat cools 0.04/s. Above 0.3 the
+  grudge kart becomes the victim: bumped when alongside (aggressive drivers), laser lined up
+  on it, hazards dropped in front of it. A rival reaching 0.7 on the player shows 💢 and toasts
+  "<name> has it in for you!" (once a race).
+- **Emotes** (`Emote.js`, sprite over the kart): 😠 hit, 😎 landed a hit, 😵 spun on a block,
+  😜 passed the player, 😤 overtaken while fighting, 💢 nemesis.
+- **Item odds by position** (`ItemSystem` ROULETTE front/back columns, `rankOf` from main):
+  leader ≈ 30% cone, 28% mud, 12% laser; last ≈ 34% boost, 34% laser, 7% cone/mud.
+- Verified (`smoke-cdp.mjs director`): parked player ⇒ rivals settle at ~0.91 pace; player
+  teleported 260 ahead ⇒ rivals at ~1.05 and closing; two laser hits on the gorilla ⇒ nemesis
+  toast; roulette percentages as above.
+
 ## 6. Testing approach
 
 There is no automated test suite. Verification so far:

@@ -107,10 +107,16 @@ class Game {
     this.chase = new ChaseCamera(this.camera, null);
 
     this.items = new ItemSystem(this.scene);
-    this.items.onEvent = (kart, what) => this.#onItemEvent(kart, what);
+    this.items.onEvent = (kart, what, by) => this.#onItemEvent(kart, what, by);
+
+    this.items.rankOf = (kart) => this.#rankOf(kart);
 
     this.rivals = new Rivals(this.scene);
     this.rivals.items = this.items;
+    this.rivals.catchUp = s.get('catchUp');
+    this.rivals.onRivalEvent = (racer, what) => {
+      if (what === 'nemesis') this.hud.toast(`${racer.name} has it in for you!`, 1800);
+    };
     this.rivals.enabled = s.get('rivals');
     this.rivals.setPace(s.get('rivalPace'));
     this.rivals.setRails(s.get('rails'));
@@ -129,8 +135,18 @@ class Game {
     return [this.kart, ...this.rivals.active.map((r) => r.kart)];
   }
 
-  /** Item happenings worth a toast (only the player's own). */
-  #onItemEvent(kart, what) {
+  /** Race position of a kart as 0 (leading) .. 1 (last). */
+  #rankOf(kart) {
+    if (!this.race) return 0.5;
+    const field = [{ kart: this.kart, p: this.race.progress }, ...this.rivals.active.map((r) => ({ kart: r.kart, p: r.progress }))];
+    if (field.length < 2) return 0.5;
+    const mine = field.find((f) => f.kart === kart)?.p ?? 0;
+    return field.filter((f) => f.p > mine).length / (field.length - 1);
+  }
+
+  /** Item happenings: rivals react to them; the player's own get a toast. */
+  #onItemEvent(kart, what, by) {
+    this.rivals.onItemEvent(kart, what, by);
     if (kart !== this.kart) return;
     const text = {
       boost: 'Boost!',
@@ -377,6 +393,9 @@ class Game {
           break;
         case 'rivalPace':
           this.rivals.setPace(value);
+          break;
+        case 'catchUp':
+          this.rivals.catchUp = value;
           break;
         case 'laps':
           if (this.race) this.race.lapsTotal = value;

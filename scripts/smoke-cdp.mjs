@@ -1,5 +1,5 @@
 // Minimal Chrome DevTools Protocol driver for smoke-testing the game.
-// usage: (with `npm run dev` running) node scripts/smoke-cdp.mjs <race|fall|misc|items|laser|gallery|editor|remap|og|readme|mobile|mobile-portrait> <outdir>
+// usage: (with `npm run dev` running) node scripts/smoke-cdp.mjs <race|fall|misc|items|laser|gallery|editor|remap|og|readme|mobile|mobile-portrait|director> <outdir>
 // Drives headless Google Chrome (macOS path below) over the DevTools protocol and
 // writes screenshots + state logs to <outdir>. `og` stages the social preview image and
 // `readme` the README screenshots (copy them into public/ and docs/screenshots/). See docs/SPEC.md §6.
@@ -264,6 +264,30 @@ if (scenario === 'readme') {
     const blockers = g.items.entries.filter(e => e.active && (e.type === 'cone' || e.type === 'block')).map(e => { let d = e.s - g.kart.s; return d.toFixed(0) + '@' + e.lateral.toFixed(1); });
     const t = g.items.useItem(g.kart, g.rivals.active.map(x => x.kart).concat([g.kart]));
     return JSON.stringify({ t, before, spin: r.spinTime, inKarts: g.rivals.active.length, blockers }); })()`);
+} else if (scenario === 'director') {
+  const E = (label, js) => evaluate(js).then((v) => console.log(label, v));
+  const ST = `(() => { const g = __rainbowRoad.game; return 't=' + g.race.time.toFixed(1) + ' P=' + g.race.progress.toFixed(0) + ' | ' + g.rivals.active.map(r => r.name[0] + ' gap=' + (r.progress - g.race.progress).toFixed(0) + ' int=' + r.driver.intensity.toFixed(2) + ' pace=' + r.driver.paceScale.toFixed(3) + ' v=' + r.kart.speed.toFixed(1) + (r.driver.grudge ? ' grudge=' + (r.driver.grudge.kart === g.kart ? 'P' : 'R') + r.driver.grudge.heat.toFixed(2) : '')).join(' | '); })()`;
+  // 1) player parked: rivals pull away, then should ease off
+  await key('keyUp', 'ArrowUp', 'ArrowUp', 38);
+  for (let i = 0; i < 2; i++) { await sleep(4000); await E('parked', ST); }
+  // 2) teleport the player well ahead of everyone: rivals should start fighting
+  await E('jump', `(() => { const g = __rainbowRoad.game; const lead = Math.max(...g.rivals.active.map(r => r.progress)); const d = lead + 260 - g.race.progress; g.kart.s = g.path.wrap(g.kart.s + d); g.race.progress += d; g.race.lapDistance += d; g.race.prevS = g.kart.s; g.kart.syncModel(); return 'moved +' + d.toFixed(0); })()`);
+  await key('keyDown', 'ArrowUp', 'ArrowUp', 38);
+  for (let i = 0; i < 1; i++) { await sleep(3000); await E('leading', ST); }
+  // 3) grudges: player lasers the gorilla twice -> nemesis
+  const toasts = [];
+  await E('hook', `(() => { const h = __rainbowRoad.game.hud; const t = h.toast.bind(h); window.__toasts = []; h.toast = (m, ms) => { window.__toasts.push(m); t(m, ms); }; return 'ok'; })()`);
+  await E('clear road', `(() => { const g = __rainbowRoad.game; g.items.entries.forEach(e => { e.active = false; }); g.kart.spinTime = 0; g.kart.state = 'driving'; return 'ok'; })()`);
+  for (let n = 0; n < 2; n++) {
+    await E('laser ' + n, `(() => { const g = __rainbowRoad.game; const r = g.rivals.racers.find(x => x.name === 'Gorilla'); const k = g.kart; r.kart.s = g.path.wrap(k.s + 15); r.kart.lateral = k.lateral; r.kart.shield = 0; r.kart.state = 'driving'; r.kart.syncModel();
+      k.held = { type: 'laser', charges: 1 }; k.rolling = 0; g.items.useItem(k, [k, r.kart]); return 'grudge=' + JSON.stringify(r.driver.grudge && { onPlayer: r.driver.grudge.kart === k, heat: +r.driver.grudge.heat.toFixed(2) }) + ' emote=' + r.emote.visible; })()`);
+    await sleep(1500);
+  }
+  await E('after lasers', ST);
+  await E('toasts', 'JSON.stringify(window.__toasts)');
+  await shot('grudge');
+  // 4) roulette by rank
+  await E('roulette', `(async () => { const { ItemSystem } = await import('/src/items/ItemSystem.js'); const out = {}; for (const rank of [0, 0.5, 1]) { const c = {}; for (let i = 0; i < 20000; i++) { const t = ItemSystem.rollType(Math.random, rank); c[t] = (c[t] || 0) + 1; } out[rank] = Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Math.round(v / 200) + '%'])); } return JSON.stringify(out); })()`);
 } else if (scenario === 'items') {
   const E = (label, js) => evaluate(js).then((v) => console.log(label, v));
   await E('items', '(() => { const g = __rainbowRoad.game; const c = {}; for (const e of g.items.entries) c[e.type] = (c[e.type] || 0) + 1; return JSON.stringify(c) + " rivals=" + g.rivals.active.map(r => r.name); })()');

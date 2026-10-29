@@ -6,13 +6,19 @@ import { createItemMesh, createBeamMesh } from './itemMeshes.js';
 const KART_HALF_LENGTH = 1.5; // kart's trigger box along the road
 const KART_HALF_WIDTH = 0.9; // …and across it
 
-/** What an item box can give, with relative odds. */
+/**
+ * What an item box can give, with relative odds for the race leader (front) and the
+ * last racer (back); everyone in between gets a blend. Leaders get things to defend
+ * with, the back of the pack gets things to catch up with (the same rule for everyone,
+ * player included).
+ */
 const ROULETTE = [
-  ['boost', 26],
-  ['shield', 16],
-  ['laser', 22],
-  ['cone', 18],
-  ['mud', 18],
+  // type, front, back
+  ['boost', 14, 34],
+  ['shield', 16, 18],
+  ['laser', 12, 34],
+  ['cone', 30, 7],
+  ['mud', 28, 7],
 ];
 export const HELD_ITEMS = ROULETTE.map(([type]) => type);
 
@@ -41,8 +47,10 @@ export class ItemSystem {
     this.beams = [];
     this.time = 0;
     this.viewDistance = 430; // hide items past the road fog
-    /** Called as onEvent(kart, what) for things worth telling the player about. */
+    /** Called as onEvent(kart, what, by) — what happened to `kart`, and who caused it (or null). */
     this.onEvent = null;
+    /** Race position of a kart as 0 (leading) .. 1 (last); weights the item box roulette. */
+    this.rankOf = null;
     this._frame = new TrackFrame();
     this._m = new THREE.Matrix4();
     this._v = new THREE.Vector3();
@@ -155,15 +163,16 @@ export class ItemSystem {
     return type;
   }
 
-  /** A random item from the roulette. */
-  static rollType(random = Math.random) {
-    const total = ROULETTE.reduce((a, [, w]) => a + w, 0);
+  /** A random item from the roulette, for a racer at `rank` (0 = leading, 1 = last). */
+  static rollType(random = Math.random, rank = 0.5) {
+    const weights = ROULETTE.map(([type, front, back]) => [type, front + (back - front) * rank]);
+    const total = weights.reduce((a, [, w]) => a + w, 0);
     let r = random() * total;
-    for (const [type, w] of ROULETTE) {
+    for (const [type, w] of weights) {
       r -= w;
       if (r < 0) return type;
     }
-    return ROULETTE[0][0];
+    return weights[0][0];
   }
 
   /* ------------------------------------------------------------------ */
@@ -237,7 +246,7 @@ export class ItemSystem {
     switch (e.type) {
       case 'itembox':
         this.#collect(e);
-        if (kart.rollItem(ItemSystem.rollType())) this.onEvent?.(kart, 'itembox');
+        if (kart.rollItem(ItemSystem.rollType(Math.random, this.rankOf?.(kart) ?? 0.5))) this.onEvent?.(kart, 'itembox');
         break;
       case 'boost':
         this.#collect(e);
@@ -256,10 +265,16 @@ export class ItemSystem {
         break;
       case 'mud':
         kart.inMud = true;
+        // someone else's mud: tell on them (once per kart per patch)
+        if (e.owner && e.owner !== kart && !(e.splashed ||= new Set()).has(kart)) {
+          e.splashed.add(kart);
+          this.onEvent?.(kart, 'hit-drop', e.owner);
+        }
         break;
       case 'cone':
         this.#knockCone(e, kart);
         if (kart.shield <= 0) kart.speed *= 0.88;
+        if (e.owner && e.owner !== kart) this.onEvent?.(kart, 'hit-drop', e.owner);
         break;
       case 'block':
         this.#hitBlock(kart, ds, dl, overS, overL);
@@ -390,13 +405,13 @@ export class ItemSystem {
       const k = target.kart;
       if (k.shield > 0) {
         k.shield = 0;
-        this.onEvent?.(k, 'shield-pop');
+        this.onEvent?.(k, 'shield-pop', kart);
       } else {
         k.spinOut(1.3);
         k.speed *= 0.5;
-        this.onEvent?.(k, 'lasered');
+        this.onEvent?.(k, 'lasered', kart);
       }
-      this.onEvent?.(kart, 'laser-hit');
+      this.onEvent?.(kart, 'laser-hit', k);
     } else if (target?.entry?.type === 'cone') {
       this.#knockCone(target.entry, kart);
     }
